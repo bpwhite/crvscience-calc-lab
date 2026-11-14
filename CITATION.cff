@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software or its validation datasets, please cite both the software repository and the accompanying CRV Science Apps monograph."
+type: software
+title: "Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench"
+version: "0.5.0"
+date-released: "2026-11-14"
+doi: "10.5281/zenodo.24222372"
+url: "https://crvscience.com/apps"
+repository-code: "https://github.com/bpwhite/crvscience-calc-lab"
+license: "MIT"
+authors:
+  - family-names: "White"
+    given-names: "Bryan P."
+    affiliation: "CRV Science Labs"
+keywords:
+  - "scientific calculus"
+  - "Runge-Kutta"
+  - "differential equations"
+  - "linear algebra"
+  - "Rust"
+preferred-citation:
+  type: article
+  title: "Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench"
+  authors:
+    - family-names: "White"
+      given-names: "Bryan P."
+      affiliation: "CRV Science Labs"
+  year: 2026
+  journal: "CRV Science Apps Preprints"
+  doi: "10.5281/zenodo.24222372"
+  url: "https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode"
+  notes: "Preprint ID: APP-PREPRINT-03"

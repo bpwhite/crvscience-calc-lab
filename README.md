@@ -22,3 +22,23 @@ cargo run --release -p calc-app -- --self-test
 # 3. Launch the native desktop GUI (opens directly into the Main Menu Hub)
 cargo run --release -p calc-app
 ```
+
+## Citation & CRV Science Apps Hub
+
+- **CRV Science Apps Hub**: <https://crvscience.com/apps>
+- **Companion Preprint (`APP-PREPRINT-03`)**: [Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench](https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode)
+- **Zenodo Concept DOI**: [10.5281/zenodo.24222372](https://doi.org/10.5281/zenodo.24222372)
+- **Validation Suite & Telemetry**: [`validation/README.md`](validation/README.md) (`cargo test --workspace`)
+- **Machine-Readable Metadata**: [`CITATION.cff`](CITATION.cff)
+
+```bibtex
+@article{White2026CalcLab,
+  author  = {White, Bryan P.},
+  title   = {Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench},
+  journal = {CRV Science Apps Preprints},
+  year    = {2026},
+  doi     = {10.5281/zenodo.24222372},
+  url     = {https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode},
+  note    = {Software v0.5.0; Preprint ID: APP-PREPRINT-03}
+}
+```

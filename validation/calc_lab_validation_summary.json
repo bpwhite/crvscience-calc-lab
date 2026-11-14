@@ -1,0 +1,183 @@
+{
+  "concept_doi": "10.5281/zenodo.24222372",
+  "preprint_id": "APP-PREPRINT-03",
+  "preprint_url": "https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode",
+  "repo": "crvscience-calc-lab",
+  "schema_version": "1.0",
+  "tests": {
+    "t1_curriculum_domain_sweep": {
+      "bayes_posterior_given_pos": 0.3241379310344826,
+      "domain_count": 6,
+      "mat2_det": 1.6700000000000002,
+      "mat2_phase_class": "Asymptotically Stable Spiral Sink (alpha < 0)",
+      "mat2_rank": 2,
+      "mat2_trace": -2.4,
+      "mean_steps_per_problem": 2.892361111111111,
+      "module_count": 48,
+      "notation_lexicon_entries": 15,
+      "ols_r_squared": 0.9988932358694529,
+      "ols_slope": 1.9699999999999995,
+      "sqlite_mastery_records": 48,
+      "stage_count": 8,
+      "verified_module_domain_pairs": 288
+    },
+    "t2_rk4_vs_euler_convergence": {
+      "csv_artifact": "validation/rk4_convergence_table.csv",
+      "final_euler_order": 1.0025886298468851,
+      "final_rk4_order": 3.9909491820453695,
+      "finest_euler_abs_error": 0.0018804856977058249,
+      "finest_rk4_abs_error": 6.262401708312382e-11,
+      "initial_condition_y0": 0.1,
+      "mean_euler_order": 1.0073510481307832,
+      "mean_rk4_order": 3.9445905488868247,
+      "ode": "dy/dt = 1.2 * y * (1 - y)",
+      "refinement_rows": [
+        {
+          "dt": 0.4,
+          "euler_abs_error": 0.061728317950961675,
+          "euler_empirical_order": null,
+          "rk4_abs_error": 0.00005419276395457473,
+          "rk4_empirical_order": null,
+          "steps": 5,
+          "y_euler": 0.4887925470252268,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5504666722122339
+        },
+        {
+          "dt": 0.2,
+          "euler_abs_error": 0.030698369067435283,
+          "euler_empirical_order": 1.007770468952302,
+          "rk4_abs_error": 3.73680586795988e-6,
+          "rk4_empirical_order": 3.858222708888368,
+          "steps": 10,
+          "y_euler": 0.5198224959087532,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5505171281703205
+        },
+        {
+          "dt": 0.1,
+          "euler_abs_error": 0.015213363448649653,
+          "euler_empirical_order": 1.0128228638503984,
+          "rk4_abs_error": 2.455010940094482e-7,
+          "rk4_empirical_order": 3.9280042570887614,
+          "steps": 20,
+          "y_euler": 0.5353075015275388,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5505206194750945
+        },
+        {
+          "dt": 0.05,
+          "euler_abs_error": 0.007561081360773381,
+          "euler_empirical_order": 1.0086746629935632,
+          "rk4_abs_error": 1.57330023453639e-8,
+          "rk4_empirical_order": 3.96386354038723,
+          "steps": 40,
+          "y_euler": 0.5429597836154151,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5505208492431861
+        },
+        {
+          "dt": 0.025,
+          "euler_abs_error": 0.0037677257698320865,
+          "euler_empirical_order": 1.0048986150107668,
+          "rk4_abs_error": 9.957179525343918e-10,
+          "rk4_empirical_order": 3.981913056024396,
+          "steps": 80,
+          "y_euler": 0.5467531392063564,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5505208639804705
+        },
+        {
+          "dt": 0.0125,
+          "euler_abs_error": 0.0018804856977058249,
+          "euler_empirical_order": 1.0025886298468851,
+          "rk4_abs_error": 6.262401708312382e-11,
+          "rk4_empirical_order": 3.9909491820453695,
+          "steps": 160,
+          "y_euler": 0.5486403792784826,
+          "y_exact": 0.5505208649761885,
+          "y_rk4": 0.5505208649135644
+        }
+      ],
+      "t_end": 2.0,
+      "y_exact_t_end": 0.5505208649761885
+    },
+    "t3_1d_heat_pde_stability": {
+      "alpha": 0.45,
+      "domain_len": 3.141592653589793,
+      "gaussian_l2_ratio_t0_4": 0.42813246174463326,
+      "gaussian_mass_t0": 0.6969305501044368,
+      "gaussian_mass_t0_4": 0.6484694500942825,
+      "gaussian_peak_t0": 0.9355929343395823,
+      "gaussian_peak_t0_4": 0.41509911688677,
+      "max_dirichlet_boundary_error": 3.245314017740487e-16,
+      "max_l2_energy_error": 1.6653345369377348e-16,
+      "num_modes": 12,
+      "spatial_samples": 129,
+      "square_pulse_l2_ratio_t0_4": 0.5402833684456075,
+      "two_mode_snapshots": [
+        {
+          "exact_l2_energy_ratio": 1.0,
+          "l2_abs_error": 0.0,
+          "l2_energy_ratio": 1.0,
+          "mode1_energy": 1.0000000000000004,
+          "mode3_energy": 0.5499999999999999,
+          "peak_amplitude": 1.1194044146910942,
+          "spatial_integral": 2.3664047032613857,
+          "time_t": 0.0
+        },
+        {
+          "exact_l2_energy_ratio": 0.8888736791691274,
+          "l2_abs_error": 1.1102230246251563e-16,
+          "l2_energy_ratio": 0.8888736791691273,
+          "mode1_energy": 0.9777512371933368,
+          "mode3_energy": 0.4491775654289609,
+          "peak_amplitude": 1.0179607186618045,
+          "spatial_integral": 2.254724321570834,
+          "time_t": 0.05
+        },
+        {
+          "exact_l2_energy_ratio": 0.7397087838863594,
+          "l2_abs_error": 1.1102230246251563e-16,
+          "l2_energy_ratio": 0.7397087838863595,
+          "mode1_energy": 0.934727720616028,
+          "mode3_energy": 0.2995910200989821,
+          "peak_amplitude": 0.8728364564746828,
+          "spatial_integral": 2.069001540765795,
+          "time_t": 0.15
+        },
+        {
+          "exact_l2_energy_ratio": 0.5739356839414995,
+          "l2_abs_error": 1.1102230246251563e-16,
+          "l2_energy_ratio": 0.5739356839414996,
+          "mode1_energy": 0.8542768136084798,
+          "mode3_energy": 0.13327548185899143,
+          "peak_amplitude": 0.740339311365962,
+          "spatial_integral": 1.7972799781670818,
+          "time_t": 0.35
+        },
+        {
+          "exact_l2_energy_ratio": 0.409700407103968,
+          "l2_abs_error": 1.6653345369377348e-16,
+          "l2_energy_ratio": 0.40970040710396816,
+          "mode1_energy": 0.7297888742690571,
+          "mode3_energy": 0.03229518920862974,
+          "peak_amplitude": 0.697461127741091,
+          "spatial_integral": 1.481026157773286,
+          "time_t": 0.7
+        },
+        {
+          "exact_l2_energy_ratio": 0.2607398823954737,
+          "l2_abs_error": 5.551115123125783e-17,
+          "l2_energy_ratio": 0.26073988239547374,
+          "mode1_energy": 0.5827482523739899,
+          "mode3_energy": 0.00426276614012518,
+          "peak_amplitude": 0.578445127936458,
+          "spatial_integral": 1.1682794804015386,
+          "time_t": 1.2
+        }
+      ]
+    }
+  },
+  "version": "0.5.0"
+}
