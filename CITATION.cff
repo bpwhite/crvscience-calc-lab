@@ -20,7 +20,7 @@ keywords:
   - "Rust"
 preferred-citation:
   type: article
-  title: "Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench"
+  title: "Calc-Lab: Interactive Calculus, Linear Algebra, and Differential Equation Solver Workbench"
   authors:
     - family-names: "White"
       given-names: "Bryan P."

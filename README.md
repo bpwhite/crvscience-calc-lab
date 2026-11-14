@@ -34,7 +34,7 @@ cargo run --release -p calc-app
 ```bibtex
 @article{White2026CalcLab,
   author  = {White, Bryan P.},
-  title   = {Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench},
+  title   = {Calc-Lab: Interactive Calculus, Linear Algebra, and Differential Equation Solver Workbench},
   journal = {CRV Science Apps Preprints},
   year    = {2026},
   doi     = {10.5281/zenodo.24222372},
