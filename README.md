@@ -1,5 +1,7 @@
 # CalcLab v0.5.0 — Native Rust Mathematics, Notation Literacy, PDEs & Statistical Inference Workbench
 
+![Calc-Lab Headless Workbench](validation/headless_screenshot.png)
+
 A standalone native Rust desktop application (`eframe` / `egui` + `egui_plot` + bundled `rusqlite`) featuring a distraction-free **Main Menu Hub**, **8 Stage Portals with Focused 6-Module Drill-Down Views**, an interactive **Notation Studio**, **Timed Game Modes** (`Quick Blitz 90s`, `Medium 5m`, `Infinite`), **Step-by-Step Visual Method Walkthroughs**, **6 Scientific Domain Lenses**, and **8 Interactive Mathematical Laboratories** across **48 modules**.
 
 ## Main Menu & Navigation Flow (`v0.5.0`)

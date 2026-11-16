@@ -1,3 +1,18 @@
+// Copyright (C) 2026 CRV Science Network (https://crvscience.com)
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://gnu.org>.
+
 use crate::theme::AcademicTheme;
 use crate::ui_analytics::{render_analytics, AnalyticsAction, AnalyticsViewState};
 use crate::ui_lab::{render_lab, LabState};
@@ -62,11 +77,19 @@ pub struct CalcLabApp {
 
 impl CalcLabApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self::new_with_mode(false)
+    }
+
+    pub fn new_with_mode(in_memory: bool) -> Self {
         let catalog = build_curriculum();
-        let db_path = PathBuf::from("calclab_profile.db");
-        let store = ProfileStore::open(&db_path)
-            .or_else(|_| ProfileStore::open_in_memory())
-            .expect("Failed to initialize SQLite ProfileStore");
+        let store = if in_memory {
+            ProfileStore::open_in_memory().expect("Failed to initialize in-memory ProfileStore")
+        } else {
+            let db_path = PathBuf::from("calclab_profile.db");
+            ProfileStore::open(&db_path)
+                .or_else(|_| ProfileStore::open_in_memory())
+                .expect("Failed to initialize SQLite ProfileStore")
+        };
 
         let mastery = store
             .load_all_mastery(&catalog)
@@ -103,7 +126,7 @@ impl CalcLabApp {
         }
     }
 
-    fn apply_nav_command(&mut self, cmd: NavCommand) {
+    pub(crate) fn apply_nav_command(&mut self, cmd: NavCommand) {
         match cmd {
             NavCommand::OpenModule { module_id, tab } => {
                 self.selected_module_id = module_id.clone();
@@ -163,8 +186,8 @@ impl CalcLabApp {
     }
 }
 
-impl eframe::App for CalcLabApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+impl CalcLabApp {
+    pub(crate) fn render_ui(&mut self, ctx: &Context) {
         if self.theme_dirty {
             self.theme.apply(ctx);
             self.theme_dirty = false;
@@ -487,5 +510,11 @@ impl eframe::App for CalcLabApp {
         if let Some(cmd) = pending_nav {
             self.apply_nav_command(cmd);
         }
+    }
+}
+
+impl eframe::App for CalcLabApp {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.render_ui(ctx);
     }
 }
