@@ -31,12 +31,12 @@ pub use curriculum::{
 pub use domains::ScienceDomain;
 pub use expr::{
     adaptive_simpson, check_numeric_equivalence, check_scalar_equivalence,
-    check_vector2_equivalence, evaluate_field_2d, parse_vector2, riemann_sum,
-    taylor_polynomial_at, EvalEnv, Expr, FieldDiagnostics2D, MathFunc, RiemannMethod,
-    RiemannSummary,
+    check_vector2_equivalence, evaluate_field_2d, parse_vector2, plain_input_to_latex,
+    riemann_sum, taylor_polynomial_at, EvalEnv, Expr, FieldDiagnostics2D, MathFunc,
+    RiemannMethod, RiemannSummary,
 };
 pub use generator::{
-    AnswerFormat, GeneratedProblem, GradeOutcome, ProblemGenerator, SolutionStep,
+    AnswerFormat, GeneratedProblem, GradeOutcome, OperationKind, ProblemGenerator, SolutionStep,
 };
 pub use linalg::{
     det3, orthogonal_projection_2d, EigenSpectrum2D, Mat2, Mat2Diagnostics,

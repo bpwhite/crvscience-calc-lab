@@ -815,6 +815,164 @@ impl Expr {
             Self::Func(f, arg) => format!("{}({})", f.name(), arg.to_plain_string()),
         }
     }
+
+    /// Formats the AST as canonical 2D LaTeX with stacked `\frac`, `\sqrt`, `\pi`, `^{...}`, and implicit multiplication.
+    pub fn to_latex(&self) -> String {
+        match self {
+            Self::Const(v) => {
+                if (*v - v.round()).abs() < 1e-10 {
+                    format!("{}", v.round() as i64)
+                } else {
+                    format!("{:.4}", v)
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string()
+                }
+            }
+            Self::Pi => r"\pi".to_string(),
+            Self::EulerE => "e".to_string(),
+            Self::Var(name) => format_var_latex(name),
+            Self::Neg(a) => {
+                if a.precedence() < 3 {
+                    format!(r"-\left({}\right)", a.to_latex())
+                } else {
+                    format!("-{}", a.to_latex())
+                }
+            }
+            Self::Add(a, b) => format!("{} + {}", a.to_latex(), b.to_latex()),
+            Self::Sub(a, b) => {
+                let right = if b.precedence() <= 1 {
+                    format!(r"\left({}\right)", b.to_latex())
+                } else {
+                    b.to_latex()
+                };
+                format!("{} - {}", a.to_latex(), right)
+            }
+            Self::Mul(a, b) => {
+                let left_raw = a.to_latex();
+                let right_raw = b.to_latex();
+                let left = if a.precedence() < 2 {
+                    format!(r"\left({}\right)", left_raw)
+                } else {
+                    left_raw
+                };
+                let right = if b.precedence() < 2 || matches!(b.as_ref(), Self::Neg(_)) {
+                    format!(r"\left({}\right)", right_raw)
+                } else {
+                    right_raw
+                };
+                let is_const_right = matches!(b.as_ref(), Self::Const(_));
+                if is_const_right {
+                    format!(r"{} \cdot {}", left, right)
+                } else if needs_tex_space_after(&left, &right) {
+                    format!("{} {}", left, right)
+                } else {
+                    format!("{}{}", left, right)
+                }
+            }
+            Self::Div(a, b) => format!(r"\frac{{{}}}{{{}}}", a.to_latex(), b.to_latex()),
+            Self::Pow(base, exp) => {
+                let b_str = base.to_latex();
+                let need_parens = matches!(
+                    base.as_ref(),
+                    Self::Add(_, _)
+                        | Self::Sub(_, _)
+                        | Self::Mul(_, _)
+                        | Self::Div(_, _)
+                        | Self::Neg(_)
+                        | Self::Pow(_, _)
+                        | Self::Func(_, _)
+                );
+                let left = if need_parens {
+                    format!(r"\left({}\right)", b_str)
+                } else {
+                    b_str
+                };
+                format!("{}^{{{}}}", left, exp.to_latex())
+            }
+            Self::Func(f, arg) => {
+                let inner = arg.to_latex();
+                match f {
+                    MathFunc::Sqrt => format!(r"\sqrt{{{}}}", inner),
+                    MathFunc::Abs => format!(r"\left|{}\right|", inner),
+                    MathFunc::Exp => {
+                        if inner.contains(r"\frac") {
+                            format!(r"\exp\left({}\right)", inner)
+                        } else {
+                            format!(r"e^{{{}}}", inner)
+                        }
+                    }
+                    MathFunc::Ln => format!(r"\ln\left({}\right)", inner),
+                    MathFunc::Asin => format!(r"\arcsin\left({}\right)", inner),
+                    MathFunc::Acos => format!(r"\arccos\left({}\right)", inner),
+                    MathFunc::Atan => format!(r"\arctan\left({}\right)", inner),
+                    _ => format!(r"\{}\left({}\right)", f.name(), inner),
+                }
+            }
+        }
+    }
+}
+
+fn needs_tex_space_after(left: &str, right: &str) -> bool {
+    let first_r = right.chars().next();
+    if !matches!(first_r, Some(c) if c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    if let Some(bs) = left.rfind('\\') {
+        let tail = &left[bs + 1..];
+        !tail.is_empty() && tail.chars().all(|c| c.is_ascii_alphabetic())
+    } else {
+        false
+    }
+}
+
+fn format_var_latex(name: &str) -> String {
+    match name {
+        "pi" => return r"\pi".to_string(),
+        "theta" => return r"\theta".to_string(),
+        "lambda" => return r"\lambda".to_string(),
+        "omega" => return r"\omega".to_string(),
+        "alpha" => return r"\alpha".to_string(),
+        "beta" => return r"\beta".to_string(),
+        "gamma" => return r"\gamma".to_string(),
+        "delta" => return r"\delta".to_string(),
+        "eps" | "epsilon" => return r"\varepsilon".to_string(),
+        "mu" => return r"\mu".to_string(),
+        "sigma" => return r"\sigma".to_string(),
+        "phi" => return r"\phi".to_string(),
+        "Delta" => return r"\Delta".to_string(),
+        "Theta" => return r"\Theta".to_string(),
+        "x_bar" => return r"\bar{x}".to_string(),
+        "y_bar" => return r"\bar{y}".to_string(),
+        "y_hat" => return r"\hat{y}".to_string(),
+        "theta_hat" => return r"\hat{\theta}".to_string(),
+        "lambda_hat" => return r"\hat{\lambda}".to_string(),
+        "x_hat" => return r"\hat{x}".to_string(),
+        _ => {}
+    }
+    if let Some((stem, sub)) = name.split_once('_') {
+        let s_tex = format_var_latex(stem);
+        let sub_tex = format_var_latex(sub);
+        return format!("{}_{{{}}}", s_tex, sub_tex);
+    }
+    name.to_string()
+}
+
+pub fn plain_input_to_latex(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Empty input".to_string());
+    }
+    if (trimmed.starts_with('<') || trimmed.starts_with('[')) && trimmed.contains(',') {
+        let (p, q) = parse_vector2(trimmed)?;
+        return Ok(format!(
+            r"\left\langle {},\, {} \right\rangle",
+            p.to_latex(),
+            q.to_latex()
+        ));
+    }
+    let ast = Expr::parse(trimmed)?;
+    Ok(ast.to_latex())
 }
 
 pub fn parse_vector2(input: &str) -> Result<(Expr, Expr), String> {

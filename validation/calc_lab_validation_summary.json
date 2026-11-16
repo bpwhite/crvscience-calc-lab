@@ -12,7 +12,7 @@
       "mat2_phase_class": "Asymptotically Stable Spiral Sink (alpha < 0)",
       "mat2_rank": 2,
       "mat2_trace": -2.4,
-      "mean_steps_per_problem": 2.892361111111111,
+      "mean_steps_per_problem": 2.673611111111111,
       "module_count": 48,
       "notation_lexicon_entries": 15,
       "ols_r_squared": 0.9988932358694529,

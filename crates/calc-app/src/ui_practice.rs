@@ -14,16 +14,17 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 use crate::app::{AppTab, NavCommand};
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
-    format_run_scope, parse_vector2, pick_next_adaptive_module, score_attempt, AnswerFormat,
-    CurriculumCatalog, Expr, GeneratedProblem, GradeOutcome, LearningRunRecord, ModuleMastery,
-    ProblemGenerator, RunMode, ScienceDomain, Stage, StageScopeFilter,
+    format_run_scope, pick_next_adaptive_module, plain_input_to_latex, score_attempt,
+    AnswerFormat, CurriculumCatalog, Expr, GeneratedProblem, GradeOutcome, LearningRunRecord,
+    ModuleMastery, ProblemGenerator, RunMode, ScienceDomain, Stage, StageScopeFilter,
 };
 use chrono::Utc;
 use egui::{
-    Color32, ComboBox, Context, Frame, Key, Margin, ProgressBar, RichText, Rounding, TextEdit,
-    TextStyle, Ui,
+    Color32, ComboBox, Context, Frame, Key, Margin, ProgressBar, RichText, Rounding, Stroke,
+    TextEdit, TextStyle, Ui,
 };
 use egui_plot::{Bar, BarChart, Legend, Line, Plot, VLine};
 use rand::rngs::StdRng;
@@ -454,7 +455,7 @@ pub fn render_practice(
             }
         });
 
-    ui.add_space(8.0);
+    ui.add_space(4.0);
 
     // If a Timed or Manual Run has finished, display the Run Complete Scorecard!
     if state.run_finished {
@@ -521,18 +522,47 @@ pub fn render_practice(
         .map(|s| theme.stage_accent(s.stage))
         .unwrap_or_else(|| theme.ok_color());
 
+    let (eq_bg, text_fg) = match theme {
+        AcademicTheme::SlateDark => (
+            Color32::from_rgb(20, 24, 32),
+            Color32::from_rgb(236, 242, 250),
+        ),
+        AcademicTheme::PaperLight => (
+            Color32::from_rgb(248, 247, 242),
+            Color32::from_rgb(26, 30, 38),
+        ),
+    };
+    let op = state.active_problem.operation;
+    let [op_r, op_g, op_b] = op.accent_rgb();
+    let op_color = Color32::from_rgb(op_r, op_g, op_b);
+    let op_badge_bg = Color32::from_rgba_unmultiplied(op_r, op_g, op_b, 38);
+
     Frame::none()
         .fill(theme.card_fill())
         .stroke(theme.card_stroke())
         .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::same(14.0))
+        .inner_margin(Margin::symmetric(12.0, 9.0))
         .show(ui, |ui| {
-            if let Some(spec) = current_spec {
-                let m_score = mastery
-                    .get(spec.id)
-                    .map(|m| m.mastery_score * 100.0)
-                    .unwrap_or(0.0);
-                ui.horizontal_wrapped(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                Frame::none()
+                    .fill(op_badge_bg)
+                    .stroke(Stroke::new(1.2, op_color))
+                    .rounding(Rounding::same(4.0))
+                    .inner_margin(Margin::symmetric(9.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("OPERATION: {}", op.category_badge()))
+                                .strong()
+                                .color(op_color),
+                        );
+                    });
+                math_render::paint_latex(ui, op.operator_latex(), 15.0, op_color);
+                if let Some(spec) = current_spec {
+                    let m_score = mastery
+                        .get(spec.id)
+                        .map(|m| m.mastery_score * 100.0)
+                        .unwrap_or(0.0);
+                    ui.separator();
                     ui.label(
                         RichText::new(format!(
                             "{} | {} — {}",
@@ -548,8 +578,8 @@ pub fn render_practice(
                     ui.label(format!("Mastery: {:.0}%", m_score));
                     ui.separator();
                     ui.label(format!("Tier: {}/4", state.active_problem.difficulty));
-                });
-            }
+                }
+            });
 
             if let Some(ctx_banner) = &state.active_problem.domain_context {
                 ui.add_space(4.0);
@@ -564,24 +594,33 @@ pub fn render_practice(
                 );
             }
 
+            ui.add_space(4.0);
+            ui.heading(math_render::ui_safe_text(&state.active_problem.title));
+            ui.add_space(3.0);
+            ui.label(RichText::new(math_render::ui_safe_text(&state.active_problem.prompt)).size(15.0));
+            ui.add_space(4.0);
+            math_render::paint_latex_boxed(
+                ui,
+                &state.active_problem.target_equation_latex,
+                19.0,
+                text_fg,
+                eq_bg,
+                Stroke::new(1.2, op_color.linear_multiply(0.75)),
+            );
             ui.add_space(6.0);
-            ui.heading(&state.active_problem.title);
-            ui.add_space(6.0);
-            ui.label(RichText::new(&state.active_problem.prompt).size(16.0));
-            ui.add_space(8.0);
             ui.label(
                 RichText::new(state.active_problem.answer.format_hint())
                     .small()
                     .weak(),
             );
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
             let mut submit_now = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Answer:").strong());
                 let resp = ui.add(
                     TextEdit::singleline(&mut state.answer_input)
-                        .desired_width(400.0)
+                        .desired_width(360.0)
                         .font(TextStyle::Monospace)
                         .hint_text("Type plain-text expression or value, e.g. 6*x - 2*cos(2*x)"),
                 );
@@ -594,37 +633,32 @@ pub fn render_practice(
                 if ui.button("Next Question >>").clicked() {
                     state.advance_problem(selected_module_id, catalog, mastery, free_explore);
                 }
-            });
 
-            // Live Plain-Text Parser Preview
-            if !state.answer_input.trim().is_empty() {
-                let preview = match &state.active_problem.answer {
-                    AnswerFormat::Vector2Expr { .. } => match parse_vector2(&state.answer_input) {
-                        Ok((p, q)) => Ok(format!(
-                            "Parsed 2D vector: <{}, {}>",
-                            p.to_plain_string(),
-                            q.to_plain_string()
-                        )),
-                        Err(e) => Err(e),
-                    },
-                    _ => match Expr::parse(&state.answer_input) {
-                        Ok(ast) => Ok(format!("Parsed expression: {}", ast.to_plain_string())),
-                        Err(e) => Err(e),
-                    },
-                };
-                match preview {
-                    Ok(msg) => {
-                        ui.label(RichText::new(msg).small().monospace().weak());
-                    }
-                    Err(err) => {
-                        ui.label(
-                            RichText::new(format!("Syntax check: {}", err))
-                                .small()
-                                .color(theme.warn_color()),
-                        );
+                // Live 2D Rendered User-Input Preview inline right beside input controls
+                if !state.answer_input.trim().is_empty() {
+                    match plain_input_to_latex(&state.answer_input) {
+                        Ok(latex) => {
+                            ui.separator();
+                            ui.label(RichText::new("2D Preview:").small().weak());
+                            math_render::paint_latex_boxed(
+                                ui,
+                                &latex,
+                                15.5,
+                                text_fg,
+                                eq_bg,
+                                theme.card_stroke(),
+                            );
+                        }
+                        Err(err) => {
+                            ui.label(
+                                RichText::new(format!("Syntax check: {}", err))
+                                    .small()
+                                    .color(theme.warn_color()),
+                            );
+                        }
                     }
                 }
-            }
+            });
 
             if submit_now {
                 let outcome = state.active_problem.grade(&state.answer_input);
@@ -733,14 +767,18 @@ pub fn render_practice(
             .inner_margin(Margin::same(10.0))
             .show(ui, |ui| {
                 for i in 0..state.hints_revealed.min(state.active_problem.hints.len()) {
-                    ui.label(format!("Hint {}: {}", i + 1, state.active_problem.hints[i]));
+                    ui.label(format!(
+                        "Hint {}: {}",
+                        i + 1,
+                        math_render::ui_safe_text(&state.active_problem.hints[i])
+                    ));
                 }
             });
     }
 
     // Outcome Feedback Banner
     if let Some(outcome) = &state.last_outcome {
-        ui.add_space(8.0);
+        ui.add_space(4.0);
         let col = if outcome.correct {
             theme.ok_color()
         } else if outcome.parse_error.is_some() {
@@ -752,7 +790,7 @@ pub fn render_practice(
             .fill(theme.card_fill())
             .stroke(egui::Stroke::new(1.5, col))
             .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::same(10.0))
+            .inner_margin(Margin::symmetric(10.0, 5.0))
             .show(ui, |ui| {
                 let headline = if outcome.correct {
                     format!("Correct! +{} pts awarded", state.last_points_delta)
@@ -762,8 +800,11 @@ pub fn render_practice(
                     "Not Quite — Advance the Method Steps Below to Inspect Each Transformation"
                         .to_string()
                 };
-                ui.label(RichText::new(headline).strong().color(col));
-                ui.label(&outcome.feedback);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(headline).strong().color(col));
+                    ui.separator();
+                    ui.label(math_render::ui_safe_text(&outcome.feedback));
+                });
 
                 if !outcome.correct && outcome.parse_error.is_none() {
                     if let Some(rem_id) = &state.active_problem.remediate_module_id {
@@ -795,24 +836,24 @@ pub fn render_practice(
     // 3. STEP-BY-STEP NAMED-METHOD WALKTHROUGH & VISUAL SOLUTION PLOTTER
     // =========================================================================
     if state.step_cursor > 0 || state.run_mode == RunMode::LearningWalkthrough {
-        ui.add_space(10.0);
+        ui.add_space(4.0);
         Frame::none()
             .fill(theme.card_fill())
             .stroke(theme.card_stroke())
             .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::same(12.0))
+            .inner_margin(Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new("Step-by-Step Visual Method Walkthrough")
                             .strong()
-                            .size(16.0)
+                            .size(15.5)
                             .color(stage_accent),
                     );
                     ui.separator();
                     ui.label(
                         RichText::new(format!(
-                            "Showing {} of {} named method steps (use 'Advance Visual Step >' above to step through)",
+                            "Showing {} of {} named method steps",
                             state.step_cursor,
                             state.active_problem.steps.len()
                         ))
@@ -821,7 +862,7 @@ pub fn render_practice(
                     );
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(4.0);
                 ui.columns(2, |cols| {
                     // Left Column: Sequential Method Cards
                     if state.step_cursor == 0 {
@@ -837,34 +878,64 @@ pub fn render_practice(
                                 .fill(theme.card_fill())
                                 .stroke(egui::Stroke::new(1.2, stage_accent))
                                 .rounding(Rounding::same(5.0))
-                                .inner_margin(Margin::same(9.0))
+                                .inner_margin(Margin::symmetric(8.0, 5.0))
                                 .show(&mut cols[0], |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Step {} · {}",
+                                                step.step_number, step.rule_name
+                                            ))
+                                            .strong()
+                                            .color(stage_accent),
+                                        );
+                                        if !step.rule_identity_latex.trim().is_empty() {
+                                            ui.separator();
+                                            math_render::paint_latex(
+                                                ui,
+                                                &step.rule_identity_latex,
+                                                12.5,
+                                                op_color,
+                                            );
+                                        }
+                                    });
                                     ui.label(
-                                        RichText::new(format!(
-                                            "Step {} — Method: {}",
-                                            step.step_number, step.method_name
-                                        ))
-                                        .strong()
-                                        .color(stage_accent),
+                                        RichText::new(math_render::ui_safe_text(&step.explanation))
+                                            .small(),
                                     );
-                                    ui.label(&step.explanation);
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "State -> {}",
-                                            step.resulting_expr
-                                        ))
-                                        .monospace()
-                                        .strong(),
-                                    );
+                                    ui.horizontal_wrapped(|ui| {
+                                        math_render::paint_latex_boxed(
+                                            ui,
+                                            &step.before_latex,
+                                            14.0,
+                                            text_fg,
+                                            eq_bg,
+                                            theme.card_stroke(),
+                                        );
+                                        math_render::paint_transformation_arrow(
+                                            ui, 14.5, op_color,
+                                        );
+                                        math_render::paint_latex_boxed(
+                                            ui,
+                                            &step.after_latex,
+                                            14.0,
+                                            theme.ok_color(),
+                                            eq_bg,
+                                            egui::Stroke::new(
+                                                1.1,
+                                                theme.ok_color().linear_multiply(0.65),
+                                            ),
+                                        );
+                                    });
                                 });
-                            cols[0].add_space(6.0);
+                            cols[0].add_space(3.0);
                         }
                     }
 
-                    // Right Column: Companion Visual Step Plot
+                    // Right Column: Companion Visual Step Plot + Final Solution Card
                     let var = &state.active_problem.visual_var;
                     Plot::new("learning_step_visual_plot")
-                        .height(245.0)
+                        .height(215.0)
                         .legend(Legend::default())
                         .show(&mut cols[1], |plot_ui| {
                             if let Some(prim) = &state.active_problem.visual_primary_expr {
@@ -921,6 +992,49 @@ pub fn render_practice(
                                 }
                             }
                         });
+
+                    let show_final_solution = (state.step_cursor >= state.active_problem.steps.len()
+                        && state.step_cursor > 0)
+                        || state.last_outcome.as_ref().is_some_and(|o| o.correct);
+                    if show_final_solution {
+                        cols[1].add_space(6.0);
+                        let sol_fill = match theme {
+                            AcademicTheme::SlateDark => Color32::from_rgb(22, 42, 34),
+                            AcademicTheme::PaperLight => Color32::from_rgb(232, 246, 238),
+                        };
+                        Frame::none()
+                            .fill(sol_fill)
+                            .stroke(egui::Stroke::new(1.5, theme.ok_color()))
+                            .rounding(Rounding::same(6.0))
+                            .inner_margin(Margin::same(10.0))
+                            .show(&mut cols[1], |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        RichText::new("Final Solution:")
+                                            .strong()
+                                            .size(16.0)
+                                            .color(theme.ok_color()),
+                                    );
+                                    math_render::paint_latex_boxed(
+                                        ui,
+                                        &state.active_problem.answer_latex,
+                                        18.0,
+                                        theme.ok_color(),
+                                        eq_bg,
+                                        egui::Stroke::new(1.2, theme.ok_color()),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Plain-Text Input: {}",
+                                            state.active_problem.answer.canonical()
+                                        ))
+                                        .small()
+                                        .monospace()
+                                        .color(text_fg),
+                                    );
+                                });
+                            });
+                    }
                 });
             });
     }

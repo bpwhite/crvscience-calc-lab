@@ -14,12 +14,13 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 use crate::app::NavCommand;
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
     build_notation_lexicon, generate_notation_flash_question, NotationEntry,
     NotationFlashQuestion, ScienceDomain, Stage,
 };
-use egui::{Frame, Margin, RichText, Rounding, ScrollArea, TextEdit, Ui};
+use egui::{Color32, Frame, Margin, RichText, Rounding, ScrollArea, Stroke, TextEdit, Ui};
 
 pub struct NotationStudioState {
     pub lexicon: Vec<NotationEntry>,
@@ -161,7 +162,7 @@ pub fn render_notation_studio(
                             let entry = &state.lexicon[idx];
                             let is_sel = idx == state.selected_idx;
                             let st_col = theme.stage_accent(entry.stage);
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
                                     RichText::new(format!("[{}]", entry.stage.short_label()))
                                         .small()
@@ -169,10 +170,7 @@ pub fn render_notation_studio(
                                         .color(st_col),
                                 );
                                 if ui
-                                    .selectable_label(
-                                        is_sel,
-                                        format!("{}  —  {}", entry.symbol_display, entry.name),
-                                    )
+                                    .selectable_label(is_sel, math_render::ui_safe_text(entry.name))
                                     .clicked()
                                 {
                                     state.selected_idx = idx;
@@ -209,20 +207,37 @@ pub fn render_notation_studio(
                     );
                 });
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(&state.active_flash.symbol_banner)
-                        .monospace()
-                        .strong()
-                        .size(16.5),
+                let (eq_bg, text_fg) = match theme {
+                    AcademicTheme::SlateDark => (
+                        Color32::from_rgb(20, 24, 32),
+                        Color32::from_rgb(236, 242, 250),
+                    ),
+                    AcademicTheme::PaperLight => (
+                        Color32::from_rgb(248, 247, 242),
+                        Color32::from_rgb(26, 30, 38),
+                    ),
+                };
+                let flash_tex = math_render::unicode_math_to_latex(&state.active_flash.symbol_banner);
+                math_render::paint_latex_boxed(
+                    ui,
+                    &flash_tex,
+                    17.0,
+                    text_fg,
+                    eq_bg,
+                    theme.card_stroke(),
                 );
                 ui.add_space(4.0);
-                ui.label(&state.active_flash.question);
+                ui.label(math_render::ui_safe_text(&state.active_flash.question));
                 ui.add_space(6.0);
 
                 for c_idx in 0..4 {
                     let choice_txt = &state.active_flash.choices[c_idx];
                     let is_picked = state.selected_choice == Some(c_idx);
-                    let mut btn_rt = RichText::new(format!("{}. {}", (b'A' + c_idx as u8) as char, choice_txt));
+                    let mut btn_rt = RichText::new(format!(
+                        "{}. {}",
+                        (b'A' + c_idx as u8) as char,
+                        math_render::ui_safe_text(choice_txt)
+                    ));
                     if let Some(picked) = state.selected_choice {
                         if c_idx == state.active_flash.correct_index {
                             btn_rt = btn_rt.color(theme.ok_color()).strong();
@@ -260,7 +275,7 @@ pub fn render_notation_studio(
                             theme.warn_color()
                         }),
                     );
-                    ui.label(RichText::new(&state.active_flash.explanation).small());
+                    ui.label(RichText::new(math_render::ui_safe_text(&state.active_flash.explanation)).small());
                     ui.add_space(4.0);
                     if ui.button("Next Symbol Challenge >>").clicked() {
                         state.flash_seed = state.flash_seed.wrapping_add(1);
@@ -285,23 +300,35 @@ pub fn render_notation_studio(
                             .strong()
                             .color(st_accent),
                     );
-                    ui.heading(entry.name);
+                    ui.heading(math_render::ui_safe_text(entry.name));
                     ui.add_space(6.0);
 
+                    let (eq_bg, text_fg) = match theme {
+                        AcademicTheme::SlateDark => (
+                            Color32::from_rgb(20, 24, 32),
+                            Color32::from_rgb(236, 242, 250),
+                        ),
+                        AcademicTheme::PaperLight => (
+                            Color32::from_rgb(248, 247, 242),
+                            Color32::from_rgb(26, 30, 38),
+                        ),
+                    };
                     Frame::none()
                         .fill(theme.card_fill())
                         .stroke(theme.card_stroke())
                         .rounding(Rounding::same(5.0))
                         .inner_margin(Margin::same(10.0))
                         .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(entry.symbol_display)
-                                    .monospace()
-                                    .strong()
-                                    .size(18.0)
-                                    .color(st_accent),
+                            let sym_tex = math_render::unicode_math_to_latex(entry.symbol_display);
+                            math_render::paint_latex_boxed(
+                                ui,
+                                &sym_tex,
+                                20.0,
+                                st_accent,
+                                eq_bg,
+                                Stroke::new(1.2, st_accent.linear_multiply(0.7)),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(6.0);
                             ui.label(
                                 RichText::new(format!(
                                     "Plain-Text CalcLab Syntax:  {}",
@@ -310,21 +337,36 @@ pub fn render_notation_studio(
                                 .monospace(),
                             );
                             ui.label(
-                                RichText::new(format!("Read Aloud:  {}", entry.spoken_phrasing))
-                                    .italics(),
+                                RichText::new(format!(
+                                    "Read Aloud:  {}",
+                                    math_render::ui_safe_text(entry.spoken_phrasing)
+                                ))
+                                .italics(),
                             );
                         });
 
                     ui.add_space(8.0);
                     ui.label(RichText::new("Structural Anatomy (Piece-by-Piece):").strong());
                     for pt in entry.anatomy_points {
-                        ui.label(format!("• {}", pt));
+                        ui.label(format!("* {}", math_render::ui_safe_text(pt)));
                     }
 
                     ui.add_space(8.0);
                     ui.label(RichText::new("Equivalent Notational Dialects:").strong());
                     for eq in entry.dialect_equivalents {
-                        ui.label(RichText::new(format!("  {}", eq)).monospace());
+                        let split_idx = eq
+                            .find(": ")
+                            .filter(|&i| !eq[..i].contains('{') && !eq[..i].contains('('));
+                        if let Some(i) = split_idx {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(&eq[..=i]).small().strong().color(st_accent));
+                                let tex = math_render::unicode_math_to_latex(eq[i + 2..].trim());
+                                math_render::paint_latex(ui, &tex, 14.5, text_fg);
+                            });
+                        } else {
+                            let tex = math_render::unicode_math_to_latex(eq);
+                            math_render::paint_latex(ui, &tex, 14.5, text_fg);
+                        }
                     }
 
                     ui.add_space(8.0);
@@ -336,7 +378,7 @@ pub fn render_notation_studio(
                         .strong()
                         .color(st_accent),
                     );
-                    ui.label(entry.domain_application(domain));
+                    ui.label(math_render::ui_safe_text(entry.domain_application(domain)));
 
                     ui.add_space(8.0);
                     ui.label(
@@ -344,7 +386,7 @@ pub fn render_notation_studio(
                             .strong()
                             .color(theme.warn_color()),
                     );
-                    ui.label(entry.common_pitfall);
+                    ui.label(math_render::ui_safe_text(entry.common_pitfall));
                 });
         }
     });

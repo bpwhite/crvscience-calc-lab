@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 mod app;
+mod math_render;
 mod theme;
 mod ui_analytics;
 mod ui_lab;
@@ -24,7 +25,6 @@ mod ui_practice;
 mod ui_roadmap;
 
 use app::{AppTab, CalcLabApp, NavCommand};
-use ui_lab::StatsRightSubmode;
 use calc_core::{
     build_curriculum, build_notation_lexicon, check_scalar_equivalence, compute_bayes_binary,
     evaluate_1d_pde, fit_ols_linear, generate_notation_flash_question, normal_cdf, score_attempt,
@@ -297,31 +297,40 @@ fn run_headless_screenshot(out_path: &std::path::Path, view: u8) -> Result<(), S
     match view {
         2 => {
             app.apply_nav_command(NavCommand::OpenModule {
-                module_id: "lin-eigenvalues-diag".to_string(),
-                tab: AppTab::Lab,
-            });
-            app.apply_nav_command(NavCommand::OpenLabPreset(
-                "lin-eigenvalues-diag".to_string(),
-            ));
-        }
-        3 => {
-            app.apply_nav_command(NavCommand::OpenModule {
-                module_id: "sta-hypothesis-regression".to_string(),
-                tab: AppTab::Lab,
-            });
-            app.apply_nav_command(NavCommand::OpenLabPreset(
-                "sta-hypothesis-regression".to_string(),
-            ));
-            app.lab.stats_right_mode = StatsRightSubmode::OlsRegression;
-        }
-        _ => {
-            app.apply_nav_command(NavCommand::OpenModule {
                 module_id: "deq-linear-systems-phase".to_string(),
                 tab: AppTab::Lab,
             });
             app.apply_nav_command(NavCommand::OpenLabPreset(
                 "deq-linear-systems-phase".to_string(),
             ));
+        }
+        3 => {
+            app.notation_studio.selected_idx = 11; // Boundary Integrals & Curl/Flux Operators
+            app.apply_nav_command(NavCommand::OpenTab(AppTab::Notation));
+        }
+        _ => {
+            app.apply_nav_command(NavCommand::OpenModule {
+                module_id: "calc-integration-tech".to_string(),
+                tab: AppTab::Practice,
+            });
+            // Select the definite u-substitution integral variant to showcase tall integrals & fractions
+            for s in 1..40u64 {
+                let p = ProblemGenerator::generate_with_domain(
+                    "calc-integration-tech",
+                    s,
+                    ScienceDomain::General,
+                );
+                if p.target_equation_latex.contains(r"\int_{0}^{1}") {
+                    app.practice.active_problem = p;
+                    break;
+                }
+            }
+            app.practice.answer_input = app.practice.active_problem.answer.canonical();
+            app.practice.last_outcome =
+                Some(app.practice.active_problem.grade(&app.practice.answer_input));
+            app.practice.last_points_delta = 120;
+            app.practice.hints_revealed = 0;
+            app.practice.step_cursor = app.practice.active_problem.steps.len();
         }
     }
 
