@@ -105,24 +105,24 @@
     "t3_1d_heat_pde_stability": {
       "alpha": 0.45,
       "domain_len": 3.141592653589793,
-      "gaussian_l2_ratio_t0_4": 0.42813246174463326,
-      "gaussian_mass_t0": 0.6969305501044368,
-      "gaussian_mass_t0_4": 0.6484694500942825,
-      "gaussian_peak_t0": 0.9355929343395823,
-      "gaussian_peak_t0_4": 0.41509911688677,
-      "max_dirichlet_boundary_error": 3.245314017740487e-16,
-      "max_l2_energy_error": 1.6653345369377348e-16,
+      "gaussian_l2_ratio_t0_4": 0.4281324617474595,
+      "gaussian_mass_t0": 0.6969305501313553,
+      "gaussian_mass_t0_4": 0.6484694500966391,
+      "gaussian_peak_t0": 0.9355929343391516,
+      "gaussian_peak_t0_4": 0.4150991168877245,
+      "max_dirichlet_boundary_error": 3.245314017740488e-16,
+      "max_l2_energy_error": 2.220446049250313e-16,
       "num_modes": 12,
       "spatial_samples": 129,
-      "square_pulse_l2_ratio_t0_4": 0.5402833684456075,
+      "square_pulse_l2_ratio_t0_4": 0.5403395502138835,
       "two_mode_snapshots": [
         {
           "exact_l2_energy_ratio": 1.0,
           "l2_abs_error": 0.0,
           "l2_energy_ratio": 1.0,
-          "mode1_energy": 1.0000000000000004,
-          "mode3_energy": 0.5499999999999999,
-          "peak_amplitude": 1.1194044146910942,
+          "mode1_energy": 1.0,
+          "mode3_energy": 0.5500000000000004,
+          "peak_amplitude": 1.1194044146910944,
           "spatial_integral": 2.3664047032613857,
           "time_t": 0.0
         },
@@ -130,53 +130,84 @@
           "exact_l2_energy_ratio": 0.8888736791691274,
           "l2_abs_error": 1.1102230246251563e-16,
           "l2_energy_ratio": 0.8888736791691273,
-          "mode1_energy": 0.9777512371933368,
-          "mode3_energy": 0.4491775654289609,
+          "mode1_energy": 0.9777512371933365,
+          "mode3_energy": 0.44917756542896126,
           "peak_amplitude": 1.0179607186618045,
-          "spatial_integral": 2.254724321570834,
+          "spatial_integral": 2.254724321570832,
           "time_t": 0.05
         },
         {
           "exact_l2_energy_ratio": 0.7397087838863594,
-          "l2_abs_error": 1.1102230246251563e-16,
-          "l2_energy_ratio": 0.7397087838863595,
-          "mode1_energy": 0.934727720616028,
-          "mode3_energy": 0.2995910200989821,
-          "peak_amplitude": 0.8728364564746828,
-          "spatial_integral": 2.069001540765795,
+          "l2_abs_error": 2.220446049250313e-16,
+          "l2_energy_ratio": 0.7397087838863592,
+          "mode1_energy": 0.9347277206160276,
+          "mode3_energy": 0.2995910200989823,
+          "peak_amplitude": 0.8728364564746824,
+          "spatial_integral": 2.0690015407657936,
           "time_t": 0.15
         },
         {
           "exact_l2_energy_ratio": 0.5739356839414995,
           "l2_abs_error": 1.1102230246251563e-16,
-          "l2_energy_ratio": 0.5739356839414996,
-          "mode1_energy": 0.8542768136084798,
-          "mode3_energy": 0.13327548185899143,
-          "peak_amplitude": 0.740339311365962,
-          "spatial_integral": 1.7972799781670818,
+          "l2_energy_ratio": 0.5739356839414994,
+          "mode1_energy": 0.8542768136084795,
+          "mode3_energy": 0.13327548185899152,
+          "peak_amplitude": 0.7403393113659616,
+          "spatial_integral": 1.7972799781670814,
           "time_t": 0.35
         },
         {
           "exact_l2_energy_ratio": 0.409700407103968,
-          "l2_abs_error": 1.6653345369377348e-16,
-          "l2_energy_ratio": 0.40970040710396816,
-          "mode1_energy": 0.7297888742690571,
-          "mode3_energy": 0.03229518920862974,
-          "peak_amplitude": 0.697461127741091,
-          "spatial_integral": 1.481026157773286,
+          "l2_abs_error": 1.1102230246251563e-16,
+          "l2_energy_ratio": 0.4097004071039679,
+          "mode1_energy": 0.7297888742690568,
+          "mode3_energy": 0.03229518920862976,
+          "peak_amplitude": 0.6974611277410907,
+          "spatial_integral": 1.4810261577732855,
           "time_t": 0.7
         },
         {
           "exact_l2_energy_ratio": 0.2607398823954737,
           "l2_abs_error": 5.551115123125783e-17,
-          "l2_energy_ratio": 0.26073988239547374,
-          "mode1_energy": 0.5827482523739899,
-          "mode3_energy": 0.00426276614012518,
-          "peak_amplitude": 0.578445127936458,
-          "spatial_integral": 1.1682794804015386,
+          "l2_energy_ratio": 0.26073988239547363,
+          "mode1_energy": 0.5827482523739896,
+          "mode3_energy": 0.0042627661401251835,
+          "peak_amplitude": 0.5784451279364577,
+          "spatial_integral": 1.1682794804015384,
           "time_t": 1.2
         }
       ]
+    },
+    "t4_ode_phase_equilibria_and_custom_fourier": {
+      "custom_pde_kinds": [
+        {
+          "a0": 0.0,
+          "kind": "1D Heat / Diffusion: u_t = alpha * u_xx (Dirichlet [0, pi])",
+          "l2_energy_ratio": 0.9031207177567292,
+          "l2_truncation_error": 1.1029492016419298e-15,
+          "modes": 8
+        },
+        {
+          "a0": 0.0,
+          "kind": "1D Wave Equation: u_tt = c^2 * u_xx (Fixed Ends [0, pi])",
+          "l2_energy_ratio": 0.9150605350562844,
+          "l2_truncation_error": 1.1029492016419298e-15,
+          "modes": 8
+        },
+        {
+          "a0": 1.000000000000001,
+          "kind": "1D Advection-Diffusion: u_t + v * u_x = alpha * u_xx (Periodic [0, 2*pi])",
+          "l2_energy_ratio": 0.9578301666150716,
+          "l2_truncation_error": 9.86724757831024e-16,
+          "modes": 8
+        }
+      ],
+      "deq503_class": "Asymptotically Stable Spiral Sink (alpha < 0)",
+      "deq503_equilibria_count": 1,
+      "nullcline_p_segments": 71,
+      "nullcline_q_segments": 71,
+      "oscillator_euler_radius_error": 0.17035070588185608,
+      "oscillator_rk4_radius_error": 1.3667602161149262e-8
     }
   },
   "version": "0.5.0"

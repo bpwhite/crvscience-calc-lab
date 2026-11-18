@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
     summarize_stages, AttemptRecord, CurriculumCatalog, LearningRunRecord, ModuleMastery, RunMode,
@@ -27,18 +28,11 @@ pub enum AnalyticsAction {
     ResetProfile,
 }
 
+#[derive(Default)]
 pub struct AnalyticsViewState {
     pub confirm_reset: bool,
     pub status_banner: Option<String>,
-}
-
-impl Default for AnalyticsViewState {
-    fn default() -> Self {
-        Self {
-            confirm_reset: false,
-            status_banner: None,
-        }
-    }
+    pub status_is_error: bool,
 }
 
 pub fn render_analytics(
@@ -81,7 +75,12 @@ pub fn render_analytics(
     });
 
     if let Some(msg) = &view_state.status_banner {
-        ui.label(RichText::new(msg).color(theme.ok_color()).monospace());
+        let banner_col = if view_state.status_is_error {
+            theme.err_color()
+        } else {
+            theme.ok_color()
+        };
+        ui.label(RichText::new(msg).color(banner_col).monospace());
     }
 
     ui.add_space(6.0);
@@ -231,7 +230,7 @@ pub fn render_analytics(
         let bar = Bar::new(idx as f64, pct)
             .width(0.72)
             .fill(theme.stage_accent(spec.stage))
-            .name(format!("{} {}", spec.code, spec.title));
+            .name(format!("{} {}", spec.code, math_render::ui_safe_text(spec.title)));
         bars.push(bar);
     }
 
@@ -288,7 +287,7 @@ pub fn render_analytics(
                                 .monospace()
                                 .color(theme.stage_accent(spec.stage)),
                         );
-                        ui.label(spec.title);
+                        ui.label(math_render::ui_safe_text(spec.title));
                         ui.label(spec.stage.short_label());
                         ui.label(RichText::new(format!("{:.0}%", score)).monospace());
                         ui.label(

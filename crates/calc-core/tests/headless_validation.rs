@@ -14,8 +14,10 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 use calc_core::{
-    build_curriculum, build_notation_lexicon, compute_bayes_binary, evaluate_1d_pde, fit_ols_linear,
-    generate_notation_flash_question, solve_scalar_ode_rk4, EvalEnv, Expr, Mat2, ModuleMastery,
+    build_curriculum, build_notation_lexicon, compute_bayes_binary, evaluate_1d_pde,
+    evaluate_1d_pde_custom, extract_zero_level_segments, find_planar_equilibria, fit_ols_linear,
+    generate_notation_flash_question, solve_planar_system_euler_timed,
+    solve_planar_system_rk4_timed, solve_scalar_ode_rk4, EvalEnv, Expr, Mat2, ModuleMastery,
     PdeInitialProfile, PdeKind, ProblemGenerator, ProfileStore, ScienceDomain, Stage,
 };
 use serde_json::{json, Map, Value};
@@ -515,6 +517,76 @@ fn t3_1d_heat_pde_l2_decay_and_modal_stability() {
             "gaussian_l2_ratio_t0_4": gauss_t1.l2_energy_ratio,
             "square_pulse_l2_ratio_t0_4": square_t1.l2_energy_ratio,
             "two_mode_snapshots": snapshots_json
+        }),
+    );
+}
+
+#[test]
+fn t4_ode_phase_equilibria_and_custom_fourier_quadrature() {
+    // 1. Planar equilibria & nullclines on DEQ-503 linear spiral sink
+    let p_lin = Expr::parse("-0.4*x - 1.5*y").expect("parse P");
+    let q_lin = Expr::parse("1.5*x - 0.4*y").expect("parse Q");
+    let eqs = find_planar_equilibria(&p_lin, &q_lin, -3.5, 3.5, -3.5, 3.5);
+    assert_eq!(eqs.len(), 1);
+    assert!(eqs[0].x.abs() < 1e-6 && eqs[0].y.abs() < 1e-6);
+    assert!(eqs[0]
+        .diagnostics
+        .phase_portrait_class
+        .contains("Spiral Sink"));
+
+    let nc_p = extract_zero_level_segments(&p_lin, -3.5, 3.5, -3.5, 3.5, 56);
+    let nc_q = extract_zero_level_segments(&q_lin, -3.5, 3.5, -3.5, 3.5, 56);
+    assert!(!nc_p.is_empty() && !nc_q.is_empty());
+
+    // 2. Timed RK4 vs Euler comparison on harmonic oscillator
+    let p_osc = Expr::parse("y").expect("osc P");
+    let q_osc = Expr::parse("-x").expect("osc Q");
+    let dt = 0.05;
+    let steps = 126usize;
+    let rk4 = solve_planar_system_rk4_timed(&p_osc, &q_osc, 1.0, 0.0, dt, steps, 10.0);
+    let euler = solve_planar_system_euler_timed(&p_osc, &q_osc, 1.0, 0.0, dt, steps, 10.0);
+    let rk4_last = rk4.last().unwrap();
+    let euler_last = euler.last().unwrap();
+    let rk4_r_err = (rk4_last[1].hypot(rk4_last[2]) - 1.0).abs();
+    let euler_r_err = (euler_last[1].hypot(euler_last[2]) - 1.0).abs();
+    assert!(rk4_r_err < 1e-4);
+    assert!(euler_r_err > rk4_r_err * 100.0);
+
+    // 3. Custom u(x, 0) Fourier quadrature across all 3 PdeKinds
+    let mut pde_metrics = Vec::new();
+    for kind in [
+        PdeKind::HeatDiffusion,
+        PdeKind::WaveEquation,
+        PdeKind::AdvectionDiffusion,
+    ] {
+        let expr_str = match kind {
+            PdeKind::AdvectionDiffusion => "1.0 + sin(x) + 0.5*cos(2*x)",
+            _ => "2*sin(x) - 0.5*sin(3*x)",
+        };
+        let snap = evaluate_1d_pde_custom(kind, expr_str, 0.15, 1.0, 0.25, 8, 128)
+            .expect("custom PDE succeeds");
+        assert!(snap.l2_truncation_error < 1e-3);
+        assert!(!snap.fourier_coeffs.is_empty());
+        assert_eq!(snap.reconstructed_t0_curve.len(), snap.initial_curve.len());
+        pde_metrics.push(json!({
+            "kind": kind.label(),
+            "a0": snap.a0,
+            "l2_truncation_error": snap.l2_truncation_error,
+            "l2_energy_ratio": snap.l2_energy_ratio,
+            "modes": snap.fourier_coeffs.len(),
+        }));
+    }
+
+    write_summary_section(
+        "t4_ode_phase_equilibria_and_custom_fourier",
+        json!({
+            "deq503_equilibria_count": eqs.len(),
+            "deq503_class": eqs[0].diagnostics.phase_portrait_class,
+            "nullcline_p_segments": nc_p.len(),
+            "nullcline_q_segments": nc_q.len(),
+            "oscillator_rk4_radius_error": rk4_r_err,
+            "oscillator_euler_radius_error": euler_r_err,
+            "custom_pde_kinds": pde_metrics,
         }),
     );
 }

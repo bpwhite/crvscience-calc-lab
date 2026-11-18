@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use crate::ui_analytics::{render_analytics, AnalyticsAction, AnalyticsViewState};
 use crate::ui_lab::{render_lab, LabState};
@@ -23,10 +24,13 @@ use crate::ui_practice::{render_practice, PracticeAction, PracticeState, Problem
 use crate::ui_roadmap::render_roadmap;
 use calc_core::{
     build_curriculum, AttemptRecord, CurriculumCatalog, LearningRunRecord, ModuleMastery,
-    ProfileStore, RunMode, ScienceDomain, Stage, StageScopeFilter,
+    ModuleSpec, ProfileStore, RunMode, ScienceDomain, Stage, StageScopeFilter,
 };
 use chrono::Utc;
-use egui::{CentralPanel, ComboBox, Context, Key, RichText, ScrollArea, SidePanel, TopBottomPanel};
+use egui::{
+    CentralPanel, ComboBox, Context, Key, RichText, ScrollArea, SidePanel, TextEdit,
+    TopBottomPanel,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -73,6 +77,22 @@ pub struct CalcLabApp {
     pub practice: PracticeState,
     pub lab: LabState,
     pub analytics_view: AnalyticsViewState,
+    pub sidebar_search: String,
+    pub show_about: bool,
+    pub db_error_banner: Option<String>,
+}
+
+pub fn module_matches_query(spec: &ModuleSpec, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    spec.code.to_lowercase().contains(&q)
+        || spec.title.to_lowercase().contains(&q)
+        || spec.subtitle.to_lowercase().contains(&q)
+        || spec.id.to_lowercase().contains(&q)
+        || spec.stage.title().to_lowercase().contains(&q)
+        || spec.summary.to_lowercase().contains(&q)
 }
 
 impl CalcLabApp {
@@ -82,18 +102,30 @@ impl CalcLabApp {
 
     pub fn new_with_mode(in_memory: bool) -> Self {
         let catalog = build_curriculum();
+        let mut db_error_banner = None;
         let store = if in_memory {
             ProfileStore::open_in_memory().expect("Failed to initialize in-memory ProfileStore")
         } else {
             let db_path = PathBuf::from("calclab_profile.db");
-            ProfileStore::open(&db_path)
-                .or_else(|_| ProfileStore::open_in_memory())
-                .expect("Failed to initialize SQLite ProfileStore")
+            match ProfileStore::open(&db_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    db_error_banner = Some(format!(
+                        "Could not open {} ({}); running with in-memory profile.",
+                        db_path.display(),
+                        e
+                    ));
+                    ProfileStore::open_in_memory().expect("Failed to initialize SQLite ProfileStore")
+                }
+            }
         };
 
         let mastery = store
             .load_all_mastery(&catalog)
-            .unwrap_or_else(|_| HashMap::new());
+            .unwrap_or_else(|e| {
+                db_error_banner = Some(format!("Failed to load mastery ledger: {}", e));
+                HashMap::new()
+            });
         let learning_runs = store.load_learning_runs(100).unwrap_or_default();
         let recent_attempts = store.load_recent_attempts(100).unwrap_or_default();
 
@@ -123,6 +155,9 @@ impl CalcLabApp {
             practice,
             lab,
             analytics_view: AnalyticsViewState::default(),
+            sidebar_search: String::new(),
+            show_about: false,
+            db_error_banner,
         }
     }
 
@@ -250,6 +285,10 @@ impl CalcLabApp {
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("About").clicked() {
+                        self.show_about = true;
+                    }
+                    ui.separator();
                     let theme_btn = match self.theme {
                         AcademicTheme::SlateDark => "Paper Light",
                         AcademicTheme::PaperLight => "Slate Dark",
@@ -267,6 +306,40 @@ impl CalcLabApp {
             });
         });
 
+        // Persistent GUI Copyright Footer & Quick Links
+        TopBottomPanel::bottom("calclab_footer").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Calc-Lab v{}  |  Copyright CRV Science Network  |  GPL-3.0-or-later",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .small()
+                    .weak(),
+                );
+                ui.separator();
+                ui.hyperlink_to("crvscience.com", "https://crvscience.com");
+                ui.separator();
+                ui.hyperlink_to("crvscience.com/apps", "https://crvscience.com/apps");
+                if let Some(err) = self.db_error_banner.clone() {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(err)
+                            .small()
+                            .color(self.theme.err_color()),
+                    );
+                    if ui.small_button("Dismiss").clicked() {
+                        self.db_error_banner = None;
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("About").clicked() {
+                        self.show_about = true;
+                    }
+                });
+            });
+        });
+
         // Collapsible 48-Module Curriculum Index Sidebar (hidden automatically on Main Menu for clean focus!)
         let mut pending_nav: Option<NavCommand> = None;
         if self.show_sidebar && self.active_tab != AppTab::MainMenu {
@@ -274,10 +347,33 @@ impl CalcLabApp {
                 .resizable(true)
                 .default_width(280.0)
                 .show(ctx, |ui| {
+                    let matched_total = self
+                        .catalog
+                        .modules
+                        .iter()
+                        .filter(|spec| module_matches_query(spec, &self.sidebar_search))
+                        .count();
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Curriculum Index (48)").strong());
+                        ui.label(
+                            RichText::new(format!(
+                                "Curriculum Index ({}/{})",
+                                matched_total,
+                                self.catalog.modules.len()
+                            ))
+                            .strong(),
+                        );
                         if ui.small_button("Stage Portals").clicked() {
                             pending_nav = Some(NavCommand::OpenTab(AppTab::MainMenu));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            TextEdit::singleline(&mut self.sidebar_search)
+                                .desired_width(210.0)
+                                .hint_text("Search 48 modules (e.g. Fourier, DEQ)..."),
+                        );
+                        if !self.sidebar_search.is_empty() && ui.small_button("x").clicked() {
+                            self.sidebar_search.clear();
                         }
                     });
                     ui.separator();
@@ -285,7 +381,25 @@ impl CalcLabApp {
                         ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                if matched_total == 0 {
+                                    ui.label(
+                                        RichText::new("No modules match the current filter.")
+                                            .small()
+                                            .weak(),
+                                    );
+                                }
                                 for stage in Stage::ALL {
+                                    let matching: Vec<&ModuleSpec> = self
+                                        .catalog
+                                        .by_stage(stage)
+                                        .into_iter()
+                                        .filter(|spec| {
+                                            module_matches_query(spec, &self.sidebar_search)
+                                        })
+                                        .collect();
+                                    if matching.is_empty() {
+                                        continue;
+                                    }
                                     let accent = self.theme.stage_accent(stage);
                                     ui.add_space(4.0);
                                     if ui
@@ -296,15 +410,19 @@ impl CalcLabApp {
                                     {
                                         pending_nav = Some(NavCommand::OpenStagePortal(stage));
                                     }
-                                    for spec in self.catalog.by_stage(stage) {
+                                    for spec in matching {
                                         let pct = self
                                             .mastery
                                             .get(spec.id)
                                             .map(|m| m.mastery_score * 100.0)
                                             .unwrap_or(0.0);
                                         let selected = self.selected_module_id == spec.id;
-                                        let label =
-                                            format!("{} {} ({:.0}%)", spec.code, spec.title, pct);
+                                        let label = format!(
+                                            "{} {} ({:.0}%)",
+                                            spec.code,
+                                            math_render::ui_safe_text(spec.title),
+                                            pct
+                                        );
                                         if ui.selectable_label(selected, label).clicked() {
                                             let target_tab = match self.active_tab {
                                                 AppTab::MainMenu
@@ -418,7 +536,10 @@ impl CalcLabApp {
                                             .entry(module_id.clone())
                                             .or_insert_with(|| ModuleMastery::new(&module_id));
                                         entry.record_outcome(correct, hints_used, solve_secs, now);
-                                        let _ = self.store.save_mastery(entry);
+                                        if let Err(e) = self.store.save_mastery(entry) {
+                                            self.db_error_banner =
+                                                Some(format!("SQLite mastery save error: {}", e));
+                                        }
 
                                         let rec = AttemptRecord {
                                             id: 0,
@@ -431,14 +552,32 @@ impl CalcLabApp {
                                             hints_used,
                                             solve_secs,
                                         };
-                                        let _ = self.store.append_attempt(&rec);
-                                        self.recent_attempts =
-                                            self.store.load_recent_attempts(100).unwrap_or_default();
+                                        if let Err(e) = self.store.append_attempt(&rec) {
+                                            self.db_error_banner =
+                                                Some(format!("SQLite attempt log error: {}", e));
+                                        }
+                                        match self.store.load_recent_attempts(100) {
+                                            Ok(rows) => self.recent_attempts = rows,
+                                            Err(e) => {
+                                                self.db_error_banner = Some(format!(
+                                                    "SQLite attempt reload error: {}",
+                                                    e
+                                                ));
+                                            }
+                                        }
                                     }
                                     PracticeAction::RecordLearningRun(run_rec) => {
-                                        let _ = self.store.append_learning_run(&run_rec);
-                                        self.learning_runs =
-                                            self.store.load_learning_runs(100).unwrap_or_default();
+                                        if let Err(e) = self.store.append_learning_run(&run_rec) {
+                                            self.db_error_banner =
+                                                Some(format!("SQLite run log error: {}", e));
+                                        }
+                                        match self.store.load_learning_runs(100) {
+                                            Ok(rows) => self.learning_runs = rows,
+                                            Err(e) => {
+                                                self.db_error_banner =
+                                                    Some(format!("SQLite run reload error: {}", e));
+                                            }
+                                        }
                                     }
                                     PracticeAction::Navigate(cmd) => {
                                         pending_nav = Some(cmd);
@@ -463,41 +602,65 @@ impl CalcLabApp {
                                     AnalyticsAction::ExportJson => {
                                         match self.store.export_json(&self.catalog) {
                                             Ok(json) => {
-                                                let out_file = "calclab_progress_export.json";
-                                                match fs::write(out_file, json) {
-                                                    Ok(_) => {
-                                                        self.analytics_view.status_banner = Some(
-                                                            format!(
+                                                if let Some(out_path) = rfd::FileDialog::new()
+                                                    .set_file_name("calclab_progress_export.json")
+                                                    .add_filter("JSON Snapshot", &["json"])
+                                                    .save_file()
+                                                {
+                                                    match fs::write(&out_path, json) {
+                                                        Ok(_) => {
+                                                            self.analytics_view.status_is_error =
+                                                                false;
+                                                            self.analytics_view.status_banner =
+                                                                Some(format!(
                                                                 "Saved progress & run history snapshot to {}",
-                                                                out_file
-                                                            ),
-                                                        );
+                                                                out_path.display()
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            self.analytics_view.status_is_error =
+                                                                true;
+                                                            self.analytics_view.status_banner =
+                                                                Some(format!("Write error: {}", e));
+                                                        }
                                                     }
-                                                    Err(e) => {
-                                                        self.analytics_view.status_banner = Some(
-                                                            format!("Write error: {}", e),
-                                                        );
-                                                    }
+                                                } else {
+                                                    self.analytics_view.status_is_error = false;
+                                                    self.analytics_view.status_banner = Some(
+                                                        "JSON snapshot export cancelled."
+                                                            .to_string(),
+                                                    );
                                                 }
                                             }
                                             Err(e) => {
+                                                self.analytics_view.status_is_error = true;
                                                 self.analytics_view.status_banner =
                                                     Some(format!("Export error: {}", e));
                                             }
                                         }
                                     }
                                     AnalyticsAction::ResetProfile => {
-                                        if self.store.reset_all().is_ok() {
-                                            self.mastery = self
-                                                .store
-                                                .load_all_mastery(&self.catalog)
-                                                .unwrap_or_default();
-                                            self.learning_runs.clear();
-                                            self.recent_attempts.clear();
-                                            self.analytics_view.status_banner = Some(
-                                                "Profile mastery, run history, and attempt ledger reset."
-                                                    .to_string(),
-                                            );
+                                        match self.store.reset_all() {
+                                            Ok(()) => {
+                                                self.mastery = self
+                                                    .store
+                                                    .load_all_mastery(&self.catalog)
+                                                    .unwrap_or_default();
+                                                self.learning_runs.clear();
+                                                self.recent_attempts.clear();
+                                                self.analytics_view.status_is_error = false;
+                                                self.analytics_view.status_banner = Some(
+                                                    "Profile mastery, run history, and attempt ledger reset."
+                                                        .to_string(),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.analytics_view.status_is_error = true;
+                                                self.analytics_view.status_banner = Some(format!(
+                                                    "Profile reset error: {}",
+                                                    e
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -506,6 +669,32 @@ impl CalcLabApp {
                     });
             });
         });
+
+        if self.show_about {
+            let mut open = self.show_about;
+            egui::Window::new("About Calc-Lab")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.heading("Calc-Lab — Mathematical Mastery & Scientific Calculus Workbench");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            .monospace()
+                            .strong(),
+                    );
+                    ui.label("Copyright CRV Science Network");
+                    ui.label("License: GNU General Public License v3.0 or later (GPL-3.0-or-later)");
+                    ui.add_space(6.0);
+                    ui.label("48-module mastery DAG across 8 stages, 2D LaTeX walkthroughs, ODE phase portraits, and 1D spectral PDEs.");
+                    ui.add_space(6.0);
+                    ui.hyperlink_to("CRV Science Network (https://crvscience.com)", "https://crvscience.com");
+                    ui.hyperlink_to("CRV Science Apps Hub (https://crvscience.com/apps)", "https://crvscience.com/apps");
+                });
+            self.show_about = open;
+        }
 
         if let Some(cmd) = pending_nav {
             self.apply_nav_command(cmd);
@@ -516,5 +705,37 @@ impl CalcLabApp {
 impl eframe::App for CalcLabApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.render_ui(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_module_search_filters_by_code_title_and_stage() {
+        let catalog = build_curriculum();
+        assert_eq!(catalog.modules.len(), 48);
+        let all: Vec<_> = catalog
+            .modules
+            .iter()
+            .filter(|m| module_matches_query(m, ""))
+            .collect();
+        assert_eq!(all.len(), 48);
+
+        let deq_hits: Vec<_> = catalog
+            .modules
+            .iter()
+            .filter(|m| module_matches_query(m, "DEQ-503"))
+            .collect();
+        assert_eq!(deq_hits.len(), 1);
+        assert_eq!(deq_hits[0].id, "deq-linear-systems-phase");
+
+        let fourier_hits: Vec<_> = catalog
+            .modules
+            .iter()
+            .filter(|m| module_matches_query(m, "fourier"))
+            .collect();
+        assert!(!fourier_hits.is_empty());
     }
 }

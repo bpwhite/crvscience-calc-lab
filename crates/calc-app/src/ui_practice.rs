@@ -20,13 +20,14 @@ use calc_core::{
     format_run_scope, pick_next_adaptive_module, plain_input_to_latex, score_attempt,
     AnswerFormat, CurriculumCatalog, Expr, GeneratedProblem, GradeOutcome, LearningRunRecord,
     ModuleMastery, ProblemGenerator, RunMode, ScienceDomain, Stage, StageScopeFilter,
+    WalkthroughVisual,
 };
 use chrono::Utc;
 use egui::{
-    Color32, ComboBox, Context, Frame, Key, Margin, ProgressBar, RichText, Rounding, Stroke,
-    TextEdit, TextStyle, Ui,
+    Align, Color32, ComboBox, Context, Frame, Key, Layout, Margin, ProgressBar, RichText, Rounding,
+    Stroke, TextEdit, TextStyle, Ui,
 };
-use egui_plot::{Bar, BarChart, Legend, Line, Plot, VLine};
+use egui_plot::{Bar, BarChart, HLine, Legend, Line, Plot, Points, Polygon, VLine};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
@@ -66,6 +67,8 @@ pub struct PracticeState {
     pub last_outcome: Option<GradeOutcome>,
     pub last_points_delta: i64,
     pub outcome_recorded: bool,
+    pub focus_answer_input: bool,
+    pub last_graded_input: Option<String>,
     pub problem_started_at: Instant,
     pub seed_counter: u64,
     // Active Run / Game Scoreboard State
@@ -102,6 +105,8 @@ impl PracticeState {
             last_outcome: None,
             last_points_delta: 0,
             outcome_recorded: false,
+            focus_answer_input: true,
+            last_graded_input: None,
             problem_started_at: now,
             seed_counter,
             run_started_at: now,
@@ -128,6 +133,8 @@ impl PracticeState {
             self.step_cursor = 0;
             self.last_outcome = None;
             self.outcome_recorded = false;
+            self.last_graded_input = None;
+            self.focus_answer_input = true;
         }
     }
 
@@ -163,7 +170,74 @@ impl PracticeState {
         self.last_outcome = None;
         self.last_points_delta = 0;
         self.outcome_recorded = false;
+        self.last_graded_input = None;
+        self.focus_answer_input = true;
         self.problem_started_at = Instant::now();
+    }
+
+    pub fn on_answer_edited(&mut self) {
+        if self.last_graded_input.as_deref() != Some(self.answer_input.as_str()) {
+            self.last_outcome = None;
+            self.outcome_recorded = false;
+        }
+    }
+
+    pub fn is_ready_to_advance_on_enter(&self) -> bool {
+        self.last_outcome
+            .as_ref()
+            .is_some_and(|o| o.parse_error.is_none())
+            && self.last_graded_input.as_deref() == Some(self.answer_input.as_str())
+    }
+
+    pub fn submit_current_answer(&mut self) -> (Option<PracticeAction>, bool) {
+        let outcome = self.active_problem.grade(&self.answer_input);
+        let mut recorded_action = None;
+        let mut auto_advance = false;
+        if outcome.parse_error.is_none() {
+            self.last_graded_input = Some(self.answer_input.clone());
+            if !self.outcome_recorded {
+                self.outcome_recorded = true;
+                let solve_secs = self.problem_started_at.elapsed().as_secs_f64();
+                let s_delta = score_attempt(
+                    self.run_mode,
+                    self.active_problem.difficulty,
+                    outcome.correct,
+                    self.current_streak,
+                    solve_secs,
+                    self.step_cursor,
+                );
+                self.run_attempted += 1;
+                if outcome.correct {
+                    self.run_solved += 1;
+                    self.run_score += s_delta.points_awarded;
+                    self.last_points_delta = s_delta.points_awarded;
+                } else {
+                    self.last_points_delta = 0;
+                    // Unlock first method step automatically on miss in Learning Mode
+                    if self.step_cursor == 0 {
+                        self.step_cursor = 1;
+                    }
+                }
+                self.current_streak = s_delta.new_streak;
+                self.max_streak = self.max_streak.max(self.current_streak);
+
+                recorded_action = Some(PracticeAction::RecordAttempt {
+                    module_id: self.active_problem.module_id.clone(),
+                    title: self.active_problem.title.clone(),
+                    user_input: self.answer_input.trim().to_string(),
+                    canonical: outcome.canonical_answer.clone(),
+                    correct: outcome.correct,
+                    hints_used: self.hints_revealed.max(self.step_cursor),
+                    solve_secs,
+                });
+
+                if outcome.correct && self.run_mode.is_timed() {
+                    auto_advance = true;
+                }
+            }
+        }
+        self.last_outcome = Some(outcome);
+        (recorded_action, auto_advance)
     }
 
     pub fn advance_problem(
@@ -233,19 +307,108 @@ impl PracticeState {
     }
 }
 
-fn sample_visual_expr(expr_str: &str, var: &str, x_min: f64, x_max: f64) -> Vec<[f64; 2]> {
+fn sample_visual_segments(
+    expr_str: &str,
+    var: &str,
+    x_min: f64,
+    x_max: f64,
+    y_cap: f64,
+) -> Vec<Vec<[f64; 2]>> {
     let Ok(ast) = Expr::parse(expr_str) else {
         return Vec::new();
     };
-    let mut pts = Vec::with_capacity(201);
-    for i in 0..=200 {
-        let x = x_min + (i as f64 / 200.0) * (x_max - x_min);
+    if x_max <= x_min {
+        return Vec::new();
+    }
+    let steps = 240usize;
+    let jump_thresh = (y_cap * 0.45).max(60.0);
+    let mut segments: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut current: Vec<[f64; 2]> = Vec::new();
+    for i in 0..=steps {
+        let x = x_min + (i as f64 / steps as f64) * (x_max - x_min);
         let y = ast.eval_1d(var, x);
-        if y.is_finite() && y.abs() <= 45.0 {
-            pts.push([x, y]);
+        if y.is_finite() && y.abs() <= y_cap {
+            if let Some(&[_px, py]) = current.last() {
+                if (y - py).abs() > jump_thresh {
+                    if current.len() >= 2 {
+                        segments.push(current);
+                    }
+                    current = Vec::new();
+                }
+            }
+            current.push([x, y]);
+        } else if !current.is_empty() {
+            if current.len() >= 2 {
+                segments.push(current);
+            }
+            current = Vec::new();
         }
     }
-    pts
+    if current.len() >= 2 {
+        segments.push(current);
+    }
+    segments
+}
+
+fn sample_shaded_polygon(
+    expr_str: &str,
+    var: &str,
+    a_raw: f64,
+    b_raw: f64,
+    y_cap: f64,
+) -> Option<Vec<[f64; 2]>> {
+    let Ok(ast) = Expr::parse(expr_str) else {
+        return None;
+    };
+    let (a, b) = if a_raw <= b_raw {
+        (a_raw, b_raw)
+    } else {
+        (b_raw, a_raw)
+    };
+    if (b - a).abs() <= 1e-9 {
+        return None;
+    }
+    let mut pts = Vec::with_capacity(84);
+    pts.push([a, 0.0]);
+    let mut valid_samples = 0usize;
+    for i in 0..=80 {
+        let x = a + (i as f64 / 80.0) * (b - a);
+        let y = ast.eval_1d(var, x);
+        if y.is_finite() {
+            pts.push([x, y.clamp(-y_cap, y_cap)]);
+            valid_samples += 1;
+        }
+    }
+    pts.push([b, 0.0]);
+    if valid_samples >= 2 {
+        Some(pts)
+    } else {
+        None
+    }
+}
+
+fn adaptive_plot_y_cap(visual: &WalkthroughVisual, var: &str) -> f64 {
+    if let (Some([a_raw, b_raw]), Some(prim)) = (visual.shade_interval, visual.primary_expr.as_deref()) {
+        if let Ok(ast) = Expr::parse(prim) {
+            let (a, b) = if a_raw <= b_raw {
+                (a_raw, b_raw)
+            } else {
+                (b_raw, a_raw)
+            };
+            let mut max_abs = 0.0f64;
+            for i in 0..=40 {
+                let x = a + (i as f64 / 40.0) * (b - a);
+                let y = ast.eval_1d(var, x);
+                if y.is_finite() {
+                    max_abs = max_abs.max(y.abs());
+                }
+            }
+            if max_abs > 0.0 {
+                return (max_abs * 2.5).clamp(60.0, 500.0);
+            }
+        }
+    }
+    500.0
 }
 
 pub fn render_practice(
@@ -568,7 +731,7 @@ pub fn render_practice(
                             "{} | {} — {}",
                             spec.stage.short_label(),
                             spec.code,
-                            spec.title
+                            math_render::ui_safe_text(spec.title)
                         ))
                         .monospace()
                         .strong()
@@ -587,7 +750,7 @@ pub fn render_practice(
                     RichText::new(format!(
                         "[{}] {}",
                         state.active_problem.domain.short_tag(),
-                        ctx_banner
+                        math_render::ui_safe_text(ctx_banner)
                     ))
                     .italics()
                     .color(stage_accent),
@@ -597,7 +760,7 @@ pub fn render_practice(
             ui.add_space(4.0);
             ui.heading(math_render::ui_safe_text(&state.active_problem.title));
             ui.add_space(3.0);
-            ui.label(RichText::new(math_render::ui_safe_text(&state.active_problem.prompt)).size(15.0));
+            math_render::paint_mixed_prompt(ui, &state.active_problem.prompt, 15.0, text_fg);
             ui.add_space(4.0);
             math_render::paint_latex_boxed(
                 ui,
@@ -616,6 +779,9 @@ pub fn render_practice(
             ui.add_space(6.0);
 
             let mut submit_now = false;
+            let mut advance_now = false;
+            let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter));
+            let ready_to_advance = state.is_ready_to_advance_on_enter();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Answer:").strong());
                 let resp = ui.add(
@@ -624,14 +790,32 @@ pub fn render_practice(
                         .font(TextStyle::Monospace)
                         .hint_text("Type plain-text expression or value, e.g. 6*x - 2*cos(2*x)"),
                 );
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                if state.focus_answer_input {
+                    resp.request_focus();
+                    state.focus_answer_input = false;
+                }
+                if resp.changed() {
+                    state.on_answer_edited();
+                }
+                if ready_to_advance
+                    && !resp.changed()
+                    && enter_pressed
+                    && (resp.lost_focus() || !ctx.wants_keyboard_input())
+                {
+                    advance_now = true;
+                } else if resp.lost_focus() && enter_pressed {
                     submit_now = true;
                 }
                 if ui.button("Check Answer").clicked() {
                     submit_now = true;
                 }
-                if ui.button("Next Question >>").clicked() {
-                    state.advance_problem(selected_module_id, catalog, mastery, free_explore);
+                let next_label = if state.is_ready_to_advance_on_enter() {
+                    "Next Question >> (Enter)"
+                } else {
+                    "Next Question >>"
+                };
+                if ui.button(next_label).clicked() {
+                    advance_now = true;
                 }
 
                 // Live 2D Rendered User-Input Preview inline right beside input controls
@@ -660,51 +844,20 @@ pub fn render_practice(
                 }
             });
 
+            if advance_now {
+                state.advance_problem(selected_module_id, catalog, mastery, free_explore);
+                return;
+            }
+
             if submit_now {
-                let outcome = state.active_problem.grade(&state.answer_input);
-                if outcome.parse_error.is_none() && !state.outcome_recorded {
-                    state.outcome_recorded = true;
-                    let solve_secs = state.problem_started_at.elapsed().as_secs_f64();
-                    let s_delta = score_attempt(
-                        state.run_mode,
-                        state.active_problem.difficulty,
-                        outcome.correct,
-                        state.current_streak,
-                        solve_secs,
-                        state.step_cursor,
-                    );
-                    state.run_attempted += 1;
-                    if outcome.correct {
-                        state.run_solved += 1;
-                        state.run_score += s_delta.points_awarded;
-                        state.last_points_delta = s_delta.points_awarded;
-                    } else {
-                        state.last_points_delta = 0;
-                        // Unlock first method step automatically on miss in Learning Mode
-                        if state.step_cursor == 0 {
-                            state.step_cursor = 1;
-                        }
-                    }
-                    state.current_streak = s_delta.new_streak;
-                    state.max_streak = state.max_streak.max(state.current_streak);
-
-                    actions.push(PracticeAction::RecordAttempt {
-                        module_id: state.active_problem.module_id.clone(),
-                        title: state.active_problem.title.clone(),
-                        user_input: state.answer_input.trim().to_string(),
-                        canonical: outcome.canonical_answer.clone(),
-                        correct: outcome.correct,
-                        hints_used: state.hints_revealed.max(state.step_cursor),
-                        solve_secs,
-                    });
-
-                    // In Quick Blitz / Medium Timed modes, auto-advance immediately on correct answer!
-                    if outcome.correct && state.run_mode.is_timed() {
-                        state.advance_problem(selected_module_id, catalog, mastery, free_explore);
-                        return;
-                    }
+                let (maybe_act, auto_advance) = state.submit_current_answer();
+                if let Some(act) = maybe_act {
+                    actions.push(act);
                 }
-                state.last_outcome = Some(outcome);
+                if auto_advance {
+                    state.advance_problem(selected_module_id, catalog, mastery, free_explore);
+                    return;
+                }
             }
 
             ui.add_space(6.0);
@@ -813,7 +966,8 @@ pub fn render_practice(
                                 ui.label(
                                     RichText::new(format!(
                                         "Upstream prerequisite: {} ({})",
-                                        rem_spec.title, rem_spec.code
+                                        math_render::ui_safe_text(rem_spec.title),
+                                        rem_spec.code
                                     ))
                                     .small(),
                                 );
@@ -865,113 +1019,277 @@ pub fn render_practice(
                 ui.add_space(4.0);
                 ui.columns(2, |cols| {
                     // Left Column: Sequential Method Cards
-                    if state.step_cursor == 0 {
-                        cols[0].label(
-                            "Click 'Advance Visual Step (0/N) >' above whenever you want to reveal the first named mathematical method without spoiling the final answer.",
-                        );
-                    } else {
-                        let unlocked = state
-                            .step_cursor
-                            .min(state.active_problem.steps.len());
-                        for step in &state.active_problem.steps[..unlocked] {
-                            Frame::none()
-                                .fill(theme.card_fill())
-                                .stroke(egui::Stroke::new(1.2, stage_accent))
-                                .rounding(Rounding::same(5.0))
-                                .inner_margin(Margin::symmetric(8.0, 5.0))
-                                .show(&mut cols[0], |ui| {
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "Step {} · {}",
-                                                step.step_number, step.rule_name
-                                            ))
-                                            .strong()
-                                            .color(stage_accent),
-                                        );
-                                        if !step.rule_identity_latex.trim().is_empty() {
-                                            ui.separator();
-                                            math_render::paint_latex(
-                                                ui,
-                                                &step.rule_identity_latex,
-                                                12.5,
-                                                op_color,
+                    cols[0].with_layout(Layout::top_down(Align::Min), |ui| {
+                        if state.step_cursor == 0 {
+                            ui.label(
+                                "Click 'Advance Visual Step (0/N) >' above whenever you want to reveal the first named mathematical method without spoiling the final answer.",
+                            );
+                        } else {
+                            let unlocked = state
+                                .step_cursor
+                                .min(state.active_problem.steps.len());
+                            for step in &state.active_problem.steps[..unlocked] {
+                                Frame::none()
+                                    .fill(theme.card_fill())
+                                    .stroke(egui::Stroke::new(1.2, stage_accent))
+                                    .rounding(Rounding::same(5.0))
+                                    .inner_margin(Margin::symmetric(8.0, 5.0))
+                                    .show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "Step {} · {}",
+                                                    step.step_number,
+                                                    math_render::ui_safe_text(&step.rule_name)
+                                                ))
+                                                .strong()
+                                                .color(stage_accent),
                                             );
-                                        }
-                                    });
-                                    ui.label(
-                                        RichText::new(math_render::ui_safe_text(&step.explanation))
+                                            if !step.rule_identity_latex.trim().is_empty() {
+                                                ui.separator();
+                                                math_render::paint_latex(
+                                                    ui,
+                                                    &step.rule_identity_latex,
+                                                    12.5,
+                                                    op_color,
+                                                );
+                                            }
+                                        });
+                                        ui.label(
+                                            RichText::new(math_render::ui_safe_text(
+                                                &step.explanation,
+                                            ))
                                             .small(),
-                                    );
-                                    ui.horizontal_wrapped(|ui| {
-                                        math_render::paint_latex_boxed(
-                                            ui,
-                                            &step.before_latex,
-                                            14.0,
-                                            text_fg,
-                                            eq_bg,
-                                            theme.card_stroke(),
                                         );
-                                        math_render::paint_transformation_arrow(
-                                            ui, 14.5, op_color,
-                                        );
-                                        math_render::paint_latex_boxed(
-                                            ui,
-                                            &step.after_latex,
-                                            14.0,
-                                            theme.ok_color(),
-                                            eq_bg,
-                                            egui::Stroke::new(
-                                                1.1,
-                                                theme.ok_color().linear_multiply(0.65),
-                                            ),
-                                        );
+                                        ui.horizontal_wrapped(|ui| {
+                                            math_render::paint_latex_boxed(
+                                                ui,
+                                                &step.before_latex,
+                                                14.0,
+                                                text_fg,
+                                                eq_bg,
+                                                theme.card_stroke(),
+                                            );
+                                            math_render::paint_transformation_arrow(
+                                                ui, 14.5, op_color,
+                                            );
+                                            math_render::paint_latex_boxed(
+                                                ui,
+                                                &step.after_latex,
+                                                14.0,
+                                                theme.ok_color(),
+                                                eq_bg,
+                                                egui::Stroke::new(
+                                                    1.1,
+                                                    theme.ok_color().linear_multiply(0.65),
+                                                ),
+                                            );
+                                        });
                                     });
-                                });
-                            cols[0].add_space(3.0);
+                                ui.add_space(3.0);
+                            }
                         }
-                    }
+                    });
 
                     // Right Column: Companion Visual Step Plot + Final Solution Card
-                    let var = &state.active_problem.visual_var;
-                    Plot::new("learning_step_visual_plot")
-                        .height(215.0)
-                        .legend(Legend::default())
-                        .show(&mut cols[1], |plot_ui| {
-                            if let Some(prim) = &state.active_problem.visual_primary_expr {
-                                let pts = sample_visual_expr(prim, var, -4.5, 4.5);
-                                if pts.len() >= 2 {
-                                    plot_ui.line(
-                                        Line::new(pts)
-                                            .color(Color32::from_rgb(88, 166, 236))
-                                            .width(2.0)
-                                            .name(format!("Reference Curve ({})", var)),
-                                    );
-                                }
+                    cols[1].with_layout(Layout::top_down(Align::Min), |ui| {
+                        let visual = &state.active_problem.visual;
+                        let var = if visual.var.is_empty() {
+                            state.active_problem.visual_var.as_str()
+                        } else {
+                            visual.var.as_str()
+                        };
+                        let [x_min, x_max] = match visual.x_range {
+                            Some([lo, hi]) if hi > lo && lo.is_finite() && hi.is_finite() => {
+                                [lo, hi]
                             }
+                            _ => [-4.5, 4.5],
+                        };
+                        let prim_expr = visual
+                            .primary_expr
+                            .as_deref()
+                            .or(state.active_problem.visual_primary_expr.as_deref());
+                        let y_cap = adaptive_plot_y_cap(visual, var);
+                        let solved_or_all_steps = (state.step_cursor
+                            >= state.active_problem.steps.len()
+                            && state.step_cursor > 0)
+                            || state.last_outcome.as_ref().is_some_and(|o| o.correct);
 
-                            if state.step_cursor > 0 {
-                                let idx = (state.step_cursor - 1)
-                                    .min(state.active_problem.steps.len().saturating_sub(1));
-                                if let Some(step) = state.active_problem.steps.get(idx) {
-                                    if let Some(step_curve) = &step.visual_plot_expr {
-                                        let pts = sample_visual_expr(step_curve, var, -4.5, 4.5);
-                                        if pts.len() >= 2 {
-                                            plot_ui.line(
-                                                Line::new(pts)
-                                                    .color(Color32::from_rgb(92, 198, 148))
-                                                    .width(2.5)
-                                                    .name(format!(
-                                                        "Step {} Curve",
-                                                        step.step_number
-                                                    )),
-                                            );
+                        Plot::new("learning_step_visual_plot")
+                            .height(225.0)
+                            .legend(Legend::default())
+                            .show(ui, |plot_ui| {
+                                // 1. Shaded Integral Area Polygon over [a, b]
+                                if let (Some([a, b]), Some(prim)) =
+                                    (visual.shade_interval, prim_expr)
+                                {
+                                    if let Some(poly_pts) =
+                                        sample_shaded_polygon(prim, var, a, b, y_cap)
+                                    {
+                                        plot_ui.polygon(
+                                            Polygon::new(poly_pts)
+                                                .fill_color(Color32::from_rgba_unmultiplied(
+                                                    88, 166, 236, 56,
+                                                ))
+                                                .stroke(Stroke::new(
+                                                    1.2,
+                                                    Color32::from_rgb(88, 166, 236),
+                                                ))
+                                                .name("Shaded Integral Area"),
+                                        );
+                                    }
+                                }
+
+                                // 2. Primary curve f(x)
+                                if let Some(prim) = prim_expr {
+                                    let prim_label = visual
+                                        .primary_label
+                                        .clone()
+                                        .unwrap_or_else(|| format!("Reference Curve ({})", var));
+                                    let segs =
+                                        sample_visual_segments(prim, var, x_min, x_max, y_cap);
+                                    for (seg_idx, seg) in segs.into_iter().enumerate() {
+                                        let mut line = Line::new(seg)
+                                            .color(Color32::from_rgb(88, 166, 236))
+                                            .width(2.2);
+                                        if seg_idx == 0 {
+                                            line = line.name(&prim_label);
+                                        }
+                                        plot_ui.line(line);
+                                    }
+                                }
+
+                                // 3. Secondary / step curve (never replace primary curve with flat y = expected!)
+                                let setup_secondary = visual
+                                    .secondary_label
+                                    .as_deref()
+                                    .is_some_and(|lbl| {
+                                        lbl.contains("branch")
+                                            || lbl.contains("Line 2")
+                                            || lbl.contains("Component Q")
+                                            || lbl.contains("slice")
+                                    });
+                                let mut drew_secondary = false;
+                                if let Some(sec) = &visual.secondary_expr {
+                                    if setup_secondary || solved_or_all_steps {
+                                        let sec_label = visual
+                                            .secondary_label
+                                            .clone()
+                                            .unwrap_or_else(|| format!("Solution Curve ({})", var));
+                                        let segs =
+                                            sample_visual_segments(sec, var, x_min, x_max, y_cap);
+                                        for (seg_idx, seg) in segs.into_iter().enumerate() {
+                                            let mut line = Line::new(seg)
+                                                .color(Color32::from_rgb(92, 198, 148))
+                                                .width(2.4);
+                                            if seg_idx == 0 {
+                                                line = line.name(&sec_label);
+                                            }
+                                            plot_ui.line(line);
+                                            drew_secondary = true;
+                                        }
+                                    }
+                                }
+                                if !drew_secondary && state.step_cursor > 0 {
+                                    let idx = (state.step_cursor - 1)
+                                        .min(state.active_problem.steps.len().saturating_sub(1));
+                                    if let Some(step) = state.active_problem.steps.get(idx) {
+                                        if let Some(step_curve) = &step.visual_plot_expr {
+                                            let is_same_as_prim = prim_expr == Some(step_curve.as_str());
+                                            let is_flat_numeric_fallback = prim_expr.is_some()
+                                                && matches!(
+                                                    state.active_problem.answer,
+                                                    AnswerFormat::Numeric { .. }
+                                                )
+                                                && step_curve.trim().parse::<f64>().is_ok();
+                                            if !is_same_as_prim && !is_flat_numeric_fallback {
+                                                let segs = sample_visual_segments(
+                                                    step_curve, var, x_min, x_max, y_cap,
+                                                );
+                                                let label = format!("Step {} Curve", step.step_number);
+                                                for (seg_idx, seg) in segs.into_iter().enumerate() {
+                                                    let mut line = Line::new(seg)
+                                                        .color(Color32::from_rgb(92, 198, 148))
+                                                        .width(2.4);
+                                                    if seg_idx == 0 {
+                                                        line = line.name(&label);
+                                                    }
+                                                    plot_ui.line(line);
+                                                }
+                                            }
                                         }
                                     }
                                 }
 
-                                // For numeric answers unlocked at the final step, display exact magnitude bar/marker
-                                if state.step_cursor >= state.active_problem.steps.len() {
+                                // 4. Tangent line + point of tangency
+                                if let (Some([x0, y0]), Some(slope)) =
+                                    (visual.tangent_point, visual.tangent_slope)
+                                {
+                                    if x0.is_finite() && y0.is_finite() && slope.is_finite() {
+                                        let half_span = if slope.abs() > 1e-6 {
+                                            (25.0 / slope.abs()).min((x_max - x_min) * 0.65)
+                                        } else {
+                                            x_max - x_min
+                                        };
+                                        let tx0 = (x0 - half_span).max(x_min);
+                                        let tx1 = (x0 + half_span).min(x_max);
+                                        let ty0 = y0 + slope * (tx0 - x0);
+                                        let ty1 = y0 + slope * (tx1 - x0);
+                                        plot_ui.line(
+                                            Line::new(vec![[tx0, ty0], [tx1, ty1]])
+                                                .color(Color32::from_rgb(232, 168, 72))
+                                                .width(2.0)
+                                                .name(format!("Tangent (m = {:.3})", slope)),
+                                        );
+                                        plot_ui.points(
+                                            Points::new(vec![[x0, y0]])
+                                                .radius(5.0)
+                                                .color(Color32::from_rgb(232, 168, 72))
+                                                .name(format!("({:.2}, {:.2})", x0, y0)),
+                                        );
+                                    }
+                                }
+
+                                // 5. Highlighted points, vertical/horizontal target lines
+                                if !visual.highlight_points.is_empty() {
+                                    plot_ui.points(
+                                        Points::new(visual.highlight_points.clone())
+                                            .radius(5.5)
+                                            .color(Color32::from_rgb(232, 168, 72))
+                                            .name("Key Point(s)"),
+                                    );
+                                }
+                                if let Some(vx) = visual.vline_x {
+                                    if vx.is_finite() {
+                                        let mut vl = VLine::new(vx)
+                                            .color(Color32::from_rgb(232, 168, 72))
+                                            .width(1.6);
+                                        if let Some(lbl) = &visual.vline_label {
+                                            vl = vl.name(lbl);
+                                        }
+                                        plot_ui.vline(vl);
+                                    }
+                                }
+                                if let Some(hy) = visual.hline_y {
+                                    if hy.is_finite() {
+                                        let mut hl = HLine::new(hy)
+                                            .color(Color32::from_rgb(206, 126, 218))
+                                            .width(1.6);
+                                        if let Some(lbl) = &visual.hline_label {
+                                            hl = hl.name(lbl);
+                                        }
+                                        plot_ui.hline(hl);
+                                    }
+                                }
+
+                                // 6. Fallback BarChart + VLine ONLY when problem has no curve/interval/tangent geometry
+                                let has_curve_geometry = prim_expr.is_some()
+                                    || visual.shade_interval.is_some()
+                                    || visual.tangent_point.is_some();
+                                if !has_curve_geometry
+                                    && state.step_cursor >= state.active_problem.steps.len()
+                                    && state.step_cursor > 0
+                                {
                                     if let AnswerFormat::Numeric { expected, .. } =
                                         &state.active_problem.answer
                                     {
@@ -990,51 +1308,48 @@ pub fn render_practice(
                                         }
                                     }
                                 }
-                            }
-                        });
-
-                    let show_final_solution = (state.step_cursor >= state.active_problem.steps.len()
-                        && state.step_cursor > 0)
-                        || state.last_outcome.as_ref().is_some_and(|o| o.correct);
-                    if show_final_solution {
-                        cols[1].add_space(6.0);
-                        let sol_fill = match theme {
-                            AcademicTheme::SlateDark => Color32::from_rgb(22, 42, 34),
-                            AcademicTheme::PaperLight => Color32::from_rgb(232, 246, 238),
-                        };
-                        Frame::none()
-                            .fill(sol_fill)
-                            .stroke(egui::Stroke::new(1.5, theme.ok_color()))
-                            .rounding(Rounding::same(6.0))
-                            .inner_margin(Margin::same(10.0))
-                            .show(&mut cols[1], |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(
-                                        RichText::new("Final Solution:")
-                                            .strong()
-                                            .size(16.0)
-                                            .color(theme.ok_color()),
-                                    );
-                                    math_render::paint_latex_boxed(
-                                        ui,
-                                        &state.active_problem.answer_latex,
-                                        18.0,
-                                        theme.ok_color(),
-                                        eq_bg,
-                                        egui::Stroke::new(1.2, theme.ok_color()),
-                                    );
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "Plain-Text Input: {}",
-                                            state.active_problem.answer.canonical()
-                                        ))
-                                        .small()
-                                        .monospace()
-                                        .color(text_fg),
-                                    );
-                                });
                             });
-                    }
+
+                        if solved_or_all_steps {
+                            ui.add_space(6.0);
+                            let sol_fill = match theme {
+                                AcademicTheme::SlateDark => Color32::from_rgb(22, 42, 34),
+                                AcademicTheme::PaperLight => Color32::from_rgb(232, 246, 238),
+                            };
+                            Frame::none()
+                                .fill(sol_fill)
+                                .stroke(egui::Stroke::new(1.5, theme.ok_color()))
+                                .rounding(Rounding::same(6.0))
+                                .inner_margin(Margin::same(10.0))
+                                .show(ui, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            RichText::new("Final Solution:")
+                                                .strong()
+                                                .size(16.0)
+                                                .color(theme.ok_color()),
+                                        );
+                                        math_render::paint_latex_boxed(
+                                            ui,
+                                            &state.active_problem.answer_latex,
+                                            18.0,
+                                            theme.ok_color(),
+                                            eq_bg,
+                                            egui::Stroke::new(1.2, theme.ok_color()),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Plain-Text Input: {}",
+                                                state.active_problem.answer.canonical()
+                                            ))
+                                            .small()
+                                            .monospace()
+                                            .color(text_fg),
+                                        );
+                                    });
+                                });
+                        }
+                    });
                 });
             });
     }
@@ -1093,4 +1408,90 @@ pub fn render_practice(
         });
 
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use calc_core::build_curriculum;
+
+    #[test]
+    fn practice_state_enter_to_advance_transitions_cleanly() {
+        let catalog = build_curriculum();
+        let mastery = HashMap::new();
+        let mut state = PracticeState::new("calc-integration-tech", ScienceDomain::General);
+
+        assert!(state.focus_answer_input);
+        assert!(state.last_graded_input.is_none());
+        assert!(!state.is_ready_to_advance_on_enter());
+
+        // Empty submission yields parse_error and must NOT arm Enter-to-advance
+        let (act_empty, auto_adv_empty) = state.submit_current_answer();
+        assert!(act_empty.is_none());
+        assert!(!auto_adv_empty);
+        assert!(!state.is_ready_to_advance_on_enter());
+
+        // Valid submission arms Enter-to-advance and records last_graded_input
+        let canonical = state.active_problem.answer.canonical();
+        state.answer_input = canonical.clone();
+        let (act_ok, auto_adv) = state.submit_current_answer();
+        assert!(act_ok.is_some());
+        assert!(!auto_adv); // LearningWalkthrough waits for user's second Enter
+        assert_eq!(state.last_graded_input.as_deref(), Some(canonical.as_str()));
+        assert!(state.is_ready_to_advance_on_enter());
+
+        // Editing answer_input clears last_outcome and disarms Enter-to-advance
+        state.answer_input.push_str(" + 1");
+        state.on_answer_edited();
+        assert!(state.last_outcome.is_none());
+        assert!(!state.outcome_recorded);
+        assert!(!state.is_ready_to_advance_on_enter());
+
+        // Re-grading updated answer re-arms Enter-to-advance
+        let (act_regrade, _) = state.submit_current_answer();
+        assert!(act_regrade.is_some());
+        assert!(state.is_ready_to_advance_on_enter());
+
+        // Advancing resets input, clears grading flags, and requests TextEdit focus
+        state.focus_answer_input = false;
+        state.advance_problem("calc-integration-tech", &catalog, &mastery, true);
+        assert!(state.answer_input.is_empty());
+        assert!(state.last_outcome.is_none());
+        assert!(state.last_graded_input.is_none());
+        assert!(!state.outcome_recorded);
+        assert!(state.focus_answer_input);
+        assert!(!state.is_ready_to_advance_on_enter());
+    }
+
+    #[test]
+    fn walkthrough_sampling_and_shaded_polygon_handle_integrals_and_asymptotes() {
+        let prob = ProblemGenerator::generate_with_domain(
+            "calc-integrals-ftc",
+            7,
+            ScienceDomain::General,
+        );
+        let prim = prob
+            .visual
+            .primary_expr
+            .as_deref()
+            .expect("FTC problem should carry primary_expr");
+        let [a, b] = prob
+            .visual
+            .shade_interval
+            .expect("FTC problem should carry shade_interval");
+        let y_cap = adaptive_plot_y_cap(&prob.visual, &prob.visual.var);
+        let poly = sample_shaded_polygon(prim, &prob.visual.var, a, b, y_cap)
+            .expect("Shaded polygon should sample cleanly");
+        assert!(poly.len() >= 82);
+        assert_eq!(poly.first().unwrap()[1], 0.0);
+        assert_eq!(poly.last().unwrap()[1], 0.0);
+
+        // Discontinuity splitting across vertical asymptote x = 1
+        let segs = sample_visual_segments("1 / (x - 1)", "x", -1.0, 3.0, 500.0);
+        assert!(
+            segs.len() >= 2,
+            "Expected pole discontinuity at x=1 to split into >= 2 segments, got {}",
+            segs.len()
+        );
+    }
 }

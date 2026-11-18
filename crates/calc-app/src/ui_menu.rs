@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 use crate::app::{AppTab, NavCommand};
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
     is_module_unlocked, pick_next_adaptive_module, summarize_stages, CurriculumCatalog,
@@ -194,11 +195,19 @@ fn render_hub_overview(
                                 .color(rec_accent),
                         );
                         ui.label(
-                            RichText::new(format!("{} — {}", next_spec.code, next_spec.title))
-                                .strong()
-                                .size(16.0),
+                            RichText::new(format!(
+                                "{} — {}",
+                                next_spec.code,
+                                math_render::ui_safe_text(next_spec.title)
+                            ))
+                            .strong()
+                            .size(16.0),
                         );
-                        ui.label(RichText::new(next_spec.subtitle).small().weak());
+                        ui.label(
+                            RichText::new(math_render::ui_safe_text(next_spec.subtitle))
+                                .small()
+                                .weak(),
+                        );
                         ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
                             if ui.button("Continue Module Lesson").clicked() {
@@ -249,10 +258,13 @@ fn render_hub_overview(
                 selected_domain.context_banner(Stage::DifferentialEquations, "deq-first-order")
             {
                 ui.label(
-                    RichText::new(format!("Active Lens Preview — {}", sample_ctx))
-                        .small()
-                        .italics()
-                        .weak(),
+                    RichText::new(format!(
+                        "Active Lens Preview — {}",
+                        math_render::ui_safe_text(&sample_ctx)
+                    ))
+                    .small()
+                    .italics()
+                    .weak(),
                 );
             } else {
                 ui.label(
@@ -616,10 +628,22 @@ fn render_stage_drill_down(
                         });
 
                         ui.add_space(2.0);
-                        ui.label(RichText::new(spec.title).strong().size(15.5));
-                        ui.label(RichText::new(spec.subtitle).small().italics());
+                        ui.label(
+                            RichText::new(math_render::ui_safe_text(spec.title))
+                                .strong()
+                                .size(15.5),
+                        );
+                        ui.label(
+                            RichText::new(math_render::ui_safe_text(spec.subtitle))
+                                .small()
+                                .italics(),
+                        );
                         ui.add_space(4.0);
-                        ui.label(RichText::new(spec.summary).small().weak());
+                        ui.label(
+                            RichText::new(math_render::ui_safe_text(spec.summary))
+                                .small()
+                                .weak(),
+                        );
                         ui.add_space(6.0);
 
                         // Prerequisite Pills (clickable to jump directly to upstream stage/lesson!)
@@ -649,7 +673,7 @@ fn render_stage_drill_down(
                                                     .monospace()
                                                     .color(p_col),
                                             )
-                                            .on_hover_text(p_spec.title)
+                                            .on_hover_text(math_render::ui_safe_text(p_spec.title))
                                             .clicked()
                                         {
                                             cmd = Some(NavCommand::OpenModule {

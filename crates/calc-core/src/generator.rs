@@ -309,6 +309,24 @@ pub struct SolutionStep {
     pub visual_plot_expr: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WalkthroughVisual {
+    pub var: String,
+    pub x_range: Option<[f64; 2]>,
+    pub primary_expr: Option<String>,
+    pub primary_label: Option<String>,
+    pub secondary_expr: Option<String>,
+    pub secondary_label: Option<String>,
+    pub shade_interval: Option<[f64; 2]>,
+    pub tangent_point: Option<[f64; 2]>,
+    pub tangent_slope: Option<f64>,
+    pub highlight_points: Vec<[f64; 2]>,
+    pub vline_x: Option<f64>,
+    pub vline_label: Option<String>,
+    pub hline_y: Option<f64>,
+    pub hline_label: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedProblem {
     pub module_id: String,
@@ -327,6 +345,8 @@ pub struct GeneratedProblem {
     pub steps: Vec<SolutionStep>,
     pub visual_var: String,
     pub visual_primary_expr: Option<String>,
+    #[serde(default)]
+    pub visual: WalkthroughVisual,
     pub remediate_module_id: Option<String>,
 }
 
@@ -353,6 +373,7 @@ struct RawProblem {
     hints: Vec<String>,
     derivation_steps: Vec<String>,
     raw_steps: Vec<RawStep>,
+    visual: Option<WalkthroughVisual>,
     remediate_module_id: Option<String>,
 }
 
@@ -513,40 +534,105 @@ fn module_stage(module_id: &str) -> Stage {
     }
 }
 
-fn infer_visual_curves(raw: &RawProblem) -> (String, Option<String>, Option<String>) {
+fn infer_visual_curves(raw: &RawProblem) -> (String, Option<String>, Option<String>, WalkthroughVisual) {
+    if let Some(vis) = &raw.visual {
+        let var = if vis.var.is_empty() {
+            "x".to_string()
+        } else {
+            vis.var.clone()
+        };
+        let mut normalized = vis.clone();
+        normalized.var = var.clone();
+        return (
+            var,
+            normalized.primary_expr.clone(),
+            normalized.secondary_expr.clone(),
+            normalized,
+        );
+    }
+
     match &raw.answer {
         AnswerFormat::ScalarExpr { expected_expr, vars } => {
             if vars.len() == 1 {
                 let v = vars[0].clone();
-                // Also try to plot an antiderivative/derivative companion when single-variable
                 let primary = if let Ok(ast) = Expr::parse(expected_expr) {
-                    let d = ast.differentiate(&v).to_plain_string();
-                    Some(d)
+                    Some(ast.differentiate(&v).to_plain_string())
                 } else {
                     None
                 };
-                return (v, primary, Some(expected_expr.clone()));
+                let vis = WalkthroughVisual {
+                    var: v.clone(),
+                    primary_expr: primary.clone(),
+                    secondary_expr: Some(expected_expr.clone()),
+                    ..Default::default()
+                };
+                return (v, primary, Some(expected_expr.clone()), vis);
             } else if vars.len() == 2 && vars.contains(&"t".to_string()) && vars.contains(&"x".to_string()) {
-                // Evaluate spatial slice at t = 0.25 vs t = 0.0 for PDEs!
                 let slice_0 = expected_expr.replace("*t)", "*0.0)");
                 let slice_t = expected_expr.replace("*t)", "*0.25)");
-                return ("x".to_string(), Some(slice_0), Some(slice_t));
+                let vis = WalkthroughVisual {
+                    var: "x".to_string(),
+                    primary_expr: Some(slice_0.clone()),
+                    primary_label: Some("t = 0.0 slice".to_string()),
+                    secondary_expr: Some(slice_t.clone()),
+                    secondary_label: Some("t = 0.25 slice".to_string()),
+                    ..Default::default()
+                };
+                return ("x".to_string(), Some(slice_0), Some(slice_t), vis);
             }
-            ("x".to_string(), None, None)
+            (
+                "x".to_string(),
+                None,
+                None,
+                WalkthroughVisual {
+                    var: "x".to_string(),
+                    ..Default::default()
+                },
+            )
         }
         AnswerFormat::Vector2Expr { expected_p, expected_q, .. } => {
             let p1 = expected_p.replace("y", "1.0");
             let q1 = expected_q.replace("y", "1.0");
-            ("x".to_string(), Some(p1), Some(q1))
+            let vis = WalkthroughVisual {
+                var: "x".to_string(),
+                primary_expr: Some(p1.clone()),
+                primary_label: Some("Component P(x, 1)".to_string()),
+                secondary_expr: Some(q1.clone()),
+                secondary_label: Some("Component Q(x, 1)".to_string()),
+                ..Default::default()
+            };
+            ("x".to_string(), Some(p1), Some(q1), vis)
         }
         AnswerFormat::Numeric { expected, .. } => {
-            // Provide stage-appropriate illustrative curve anchored at the numeric result
-            if raw.module_id == "sta-mle-confidence" {
-                return ("x".to_string(), Some("5*ln(x) - 12*x".to_string()), Some(format!("{:.4}", expected)));
-            } else if raw.module_id.starts_with("sta-") {
-                return ("x".to_string(), Some("exp(-0.5*x^2)/sqrt(2*pi)".to_string()), Some(format!("{:.4}", expected)));
+            if raw.module_id.starts_with("sta-") {
+                let pdf = "exp(-0.5*x^2)/sqrt(2*pi)".to_string();
+                let vis = WalkthroughVisual {
+                    var: "x".to_string(),
+                    primary_expr: Some(pdf.clone()),
+                    primary_label: Some("Standard Normal PDF".to_string()),
+                    vline_x: Some(*expected),
+                    vline_label: Some(format!("Target = {:.3}", expected)),
+                    ..Default::default()
+                };
+                return (
+                    "x".to_string(),
+                    Some(pdf),
+                    Some(format!("{:.4}", expected)),
+                    vis,
+                );
             }
-            ("x".to_string(), None, Some(format!("{:.4}", expected)))
+            let vis = WalkthroughVisual {
+                var: "x".to_string(),
+                hline_y: Some(*expected),
+                hline_label: Some(format!("Target = {:.4}", expected)),
+                ..Default::default()
+            };
+            (
+                "x".to_string(),
+                None,
+                Some(format!("{:.4}", expected)),
+                vis,
+            )
         }
     }
 }
@@ -586,7 +672,7 @@ fn plain_to_latex_or(raw: &str) -> String {
 fn finalize_problem(raw: RawProblem, domain: ScienceDomain) -> GeneratedProblem {
     let stage = module_stage(&raw.module_id);
     let domain_context = domain.context_banner(stage, &raw.module_id);
-    let (visual_var, visual_primary_expr, final_curve) = infer_visual_curves(&raw);
+    let (visual_var, visual_primary_expr, final_curve, visual) = infer_visual_curves(&raw);
 
     let total = raw.raw_steps.len();
     let mut steps = Vec::with_capacity(total);
@@ -631,6 +717,7 @@ fn finalize_problem(raw: RawProblem, domain: ScienceDomain) -> GeneratedProblem 
         steps,
         visual_var,
         visual_primary_expr,
+        visual,
         remediate_module_id: raw.remediate_module_id,
     }
 }
@@ -719,6 +806,7 @@ impl ProblemGenerator {
                                 format!("{}", upper),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: None,
                     }
                 } else {
@@ -773,6 +861,7 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: None,
                     }
                 }
@@ -830,6 +919,7 @@ impl ProblemGenerator {
                                 format!("{}", val),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("not-sets-quantifiers".to_string()),
                     }
                 } else {
@@ -894,6 +984,7 @@ impl ProblemGenerator {
                                 expected,
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("not-sets-quantifiers".to_string()),
                     }
                 }
@@ -953,6 +1044,19 @@ impl ProblemGenerator {
                                 format!("{}", val),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-1.0, x0 as f64 + 1.5]),
+                            primary_expr: Some(format!("{}*x^3 + {}*x", a, b)),
+                            primary_label: Some(format!("f(x) = {}x^3 + {}x", a, b)),
+                            secondary_expr: Some(format!("{}*x^2 + {}", 3 * a, b)),
+                            secondary_label: Some(format!("f'(x) = {}x^2 + {}", 3 * a, b)),
+                            tangent_point: Some([x0 as f64, (a * x0.pow(3) + b * x0) as f64]),
+                            tangent_slope: Some(val as f64),
+                            vline_x: Some(x0 as f64),
+                            vline_label: Some(format!("x = {}", x0)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("not-indices-sigma-pi".to_string()),
                     }
                 } else {
@@ -1004,9 +1108,18 @@ impl ProblemGenerator {
                                 "Differentiate f'(x) with respect to x.",
                                 format!(r"\frac{{d}}{{dx}}\left[{}x^{{2}} + {}x\right]", 3 * a, 2 * b),
                                 ans_tex,
-                                expected,
+                                expected.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-2.5, 2.5]),
+                            primary_expr: Some(format!("{}*x^3 + {}*x^2", a, b)),
+                            primary_label: Some("f(x)".to_string()),
+                            secondary_expr: Some(expected),
+                            secondary_label: Some("f^(2)(x) = f''(x)".to_string()),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("not-indices-sigma-pi".to_string()),
                     }
                 }
@@ -1065,6 +1178,7 @@ impl ProblemGenerator {
                             format!("{}", norm_sq),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("not-indices-sigma-pi".to_string()),
                 }
             }
@@ -1121,6 +1235,7 @@ impl ProblemGenerator {
                             expected,
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("not-calculus-operators".to_string()),
                 }
             }
@@ -1179,6 +1294,7 @@ impl ProblemGenerator {
                                 format!("{}", theta_star),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("not-sets-quantifiers".to_string()),
                     }
                 } else {
@@ -1235,6 +1351,7 @@ impl ProblemGenerator {
                                 format!("{}", val),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("not-indices-sigma-pi".to_string()),
                     }
                 }
@@ -1310,6 +1427,14 @@ impl ProblemGenerator {
                                 expr.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([(x1 - 2) as f64, (x2 + 2) as f64]),
+                            primary_expr: Some(expr),
+                            primary_label: Some("f(x) = mx + b".to_string()),
+                            highlight_points: vec![[x1 as f64, y1 as f64], [x2 as f64, y2 as f64]],
+                            ..Default::default()
+                        }),
                         remediate_module_id: None,
                     }
                 } else {
@@ -1380,6 +1505,18 @@ impl ProblemGenerator {
                                 format!("{}", sol_x),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([(sol_x - 4) as f64, (sol_x + 4) as f64]),
+                            primary_expr: Some(format!("({} - {}*x)/{}", c1, a1, b1)),
+                            primary_label: Some(format!("Line 1: {}x + {}y = {}", a1, b1, c1)),
+                            secondary_expr: Some(format!("({}*x - {})/{}", a2, c2, -b2)),
+                            secondary_label: Some(format!("Line 2: {}x - {}y = {}", a2, -b2, c2)),
+                            highlight_points: vec![[sol_x as f64, sol_y as f64]],
+                            vline_x: Some(sol_x as f64),
+                            vline_label: Some(format!("x = {}", sol_x)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: None,
                     }
                 }
@@ -1456,6 +1593,16 @@ impl ProblemGenerator {
                                 format!("{}", k),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([(h - 4) as f64, (h + 4) as f64]),
+                            primary_expr: Some(format!("{}*x^2 + ({})*x + ({})", a, b, c)),
+                            primary_label: Some("q(x)".to_string()),
+                            highlight_points: vec![[h as f64, k as f64]],
+                            hline_y: Some(k as f64),
+                            hline_label: Some(format!("min k = {}", k)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("alg-linear-systems".to_string()),
                     }
                 } else {
@@ -1511,6 +1658,16 @@ impl ProblemGenerator {
                                 vertex_expr.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([(h - 4) as f64, (h + 4) as f64]),
+                            primary_expr: Some(format!("{}*x^2 + ({})*x + ({})", a, b, c)),
+                            primary_label: Some("q(x) standard".to_string()),
+                            secondary_expr: Some(vertex_expr),
+                            secondary_label: Some("q(x) vertex form".to_string()),
+                            highlight_points: vec![[h as f64, k as f64]],
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("alg-linear-systems".to_string()),
                     }
                 }
@@ -1584,6 +1741,7 @@ impl ProblemGenerator {
                             format!("{}", cap_a),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-quadratics".to_string()),
                 }
             }
@@ -1650,6 +1808,7 @@ impl ProblemGenerator {
                                 clean_ans.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("alg-quadratics".to_string()),
                     }
                 } else {
@@ -1701,6 +1860,7 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: None,
                     }
                 }
@@ -1764,6 +1924,18 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "t".to_string(),
+                        x_range: Some([-0.2, expected + 1.0]),
+                        primary_expr: Some(format!("3*exp({}*t)", k)),
+                        primary_label: Some(format!("3 e^({}t)", k)),
+                        hline_y: Some((3 * ratio) as f64),
+                        hline_label: Some(format!("y = {}", 3 * ratio)),
+                        vline_x: Some(expected),
+                        vline_label: Some(format!("t = {:.3}", expected)),
+                        highlight_points: vec![[expected, (3 * ratio) as f64]],
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("alg-radicals-exponents".to_string()),
                 }
             }
@@ -1833,6 +2005,7 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("alg-polynomial-rational".to_string()),
                     }
                 } else {
@@ -1890,6 +2063,7 @@ impl ProblemGenerator {
                                 format!("{}", val),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: None,
                     }
                 }
@@ -1988,6 +2162,7 @@ impl ProblemGenerator {
                             pick.2,
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-radicals-exponents".to_string()),
                 }
             }
@@ -2042,6 +2217,15 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "t".to_string(),
+                        x_range: Some([0.0, expected * 1.5]),
+                        primary_expr: Some(format!("{}*cos({}*t - pi/3)", amp, omega)),
+                        primary_label: Some("y(t)".to_string()),
+                        vline_x: Some(expected),
+                        vline_label: Some(format!("Period T = {:.3}", expected)),
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("trig-unit-circle".to_string()),
                 }
             }
@@ -2094,6 +2278,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("trig-unit-circle".to_string()),
                 }
             }
@@ -2148,6 +2333,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("trig-identities".to_string()),
                 }
             }
@@ -2209,6 +2395,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("trig-identities".to_string()),
                 }
             }
@@ -2269,6 +2456,7 @@ impl ProblemGenerator {
                             format!("{}", dot),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-linear-systems".to_string()),
                 }
             }
@@ -2339,6 +2527,16 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([0.05, (a2 + 4) as f64]),
+                            primary_expr: Some(format!("(sqrt(x) - {})/(x - {})", a, a2)),
+                            primary_label: Some("f(x)".to_string()),
+                            highlight_points: vec![[a2 as f64, expected]],
+                            vline_x: Some(a2 as f64),
+                            vline_label: Some(format!("x -> {}", a2)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("alg-radicals-exponents".to_string()),
                     }
                 } else {
@@ -2389,6 +2587,16 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-3.0, 3.0]),
+                            primary_expr: Some(format!("sin({}*x)/({}*x)", p, q)),
+                            primary_label: Some(format!("sin({}x)/({}x)", p, q)),
+                            highlight_points: vec![[0.0, expected]],
+                            vline_x: Some(0.0),
+                            vline_label: Some("x -> 0".to_string()),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("trig-unit-circle".to_string()),
                     }
                 }
@@ -2453,6 +2661,24 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: Some({
+                            let x0 = 0.5_f64;
+                            let f0 = ((a as f64) * x0).exp() * ((b as f64) * x0).sin();
+                            let df0 = ((a as f64) * x0).exp()
+                                * ((a as f64) * ((b as f64) * x0).sin()
+                                    + (b as f64) * ((b as f64) * x0).cos());
+                            WalkthroughVisual {
+                                var: "x".to_string(),
+                                x_range: Some([-1.0, 2.5]),
+                                primary_expr: Some(format!("exp({}*x)*sin({}*x)", a, b)),
+                                primary_label: Some("f(x)".to_string()),
+                                secondary_expr: Some(expected),
+                                secondary_label: Some("f'(x)".to_string()),
+                                tangent_point: Some([x0, f0]),
+                                tangent_slope: Some(df0),
+                                ..Default::default()
+                            }
+                        }),
                         remediate_module_id: Some("alg-exp-log".to_string()),
                     }
                 } else {
@@ -2506,6 +2732,22 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: Some({
+                            let x0 = 1.0_f64;
+                            let f0 = (1.0 + (k as f64)).ln();
+                            let df0 = ((k * p) as f64) / (1.0 + (k as f64));
+                            WalkthroughVisual {
+                                var: "x".to_string(),
+                                x_range: Some([-0.8, 2.5]),
+                                primary_expr: Some(format!("ln(1 + {}*x^{})", k, p)),
+                                primary_label: Some("f(x)".to_string()),
+                                secondary_expr: Some(expected),
+                                secondary_label: Some("f'(x)".to_string()),
+                                tangent_point: Some([x0, f0]),
+                                tangent_slope: Some(df0),
+                                ..Default::default()
+                            }
+                        }),
                         remediate_module_id: Some("alg-exp-log".to_string()),
                     }
                 }
@@ -2578,6 +2820,20 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: Some({
+                        let x_max = ((rhs as f64) / (a as f64)).sqrt();
+                        WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-x_max - 0.5, x_max + 0.5]),
+                            primary_expr: Some(format!("sqrt(({} - {}*x^2)/{})", rhs, a, b)),
+                            primary_label: Some("Upper ellipse branch y+(x)".to_string()),
+                            secondary_expr: Some(format!("-sqrt(({} - {}*x^2)/{})", rhs, a, b)),
+                            secondary_label: Some("Lower ellipse branch y-(x)".to_string()),
+                            tangent_point: Some([x0 as f64, y0 as f64]),
+                            tangent_slope: Some(expected),
+                            ..Default::default()
+                        }
+                    }),
                     remediate_module_id: Some("calc-derivatives-rules".to_string()),
                 }
             }
@@ -2633,6 +2889,16 @@ impl ProblemGenerator {
                             format!("{}", val),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "x".to_string(),
+                        x_range: Some([-0.5, upper as f64 + 0.75]),
+                        primary_expr: Some(format!("{}*x^2 + {}*x", 3 * a, 2 * b)),
+                        primary_label: Some(format!("f(x) = {}x^2 + {}x", 3 * a, 2 * b)),
+                        secondary_expr: Some(format!("{}*x^3 + {}*x^2", a, b)),
+                        secondary_label: Some(format!("F(x) = {}x^3 + {}x^2", a, b)),
+                        shade_interval: Some([0.0, upper as f64]),
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("alg-radicals-exponents".to_string()),
                 }
             }
@@ -2697,6 +2963,14 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-0.25, 1.35]),
+                            primary_expr: Some(format!("2*x*exp({}*x^2)", k)),
+                            primary_label: Some(format!("f(x) = 2x e^({}x^2)", k)),
+                            shade_interval: Some([0.0, 1.0]),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-derivatives-rules".to_string()),
                     }
                 } else {
@@ -2756,6 +3030,15 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([-1.5, 1.5]),
+                            primary_expr: Some(format!("x*exp({}*x)", a)),
+                            primary_label: Some(format!("f(x) = x e^({}x)", a)),
+                            secondary_expr: Some(expected),
+                            secondary_label: Some("F(x) antiderivative".to_string()),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-derivatives-rules".to_string()),
                     }
                 }
@@ -2813,6 +3096,15 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "x".to_string(),
+                        x_range: Some([-1.2, 1.2]),
+                        primary_expr: Some(format!("exp({}*x)", k)),
+                        primary_label: Some(format!("f(x) = e^({}x)", k)),
+                        secondary_expr: Some(expected),
+                        secondary_label: Some("T_3(x) Maclaurin".to_string()),
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("alg-sequences-series".to_string()),
                 }
             }
@@ -2883,6 +3175,16 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "x".to_string(),
+                        x_range: Some([0.5, 3.5]),
+                        primary_expr: Some(format!("{}*x + ({})", m, b)),
+                        primary_label: Some(format!("f(x) = {}x + ({})", m, b)),
+                        highlight_points: vec![[2.0, (2 * m + b) as f64]],
+                        vline_x: Some(2.0),
+                        vline_label: Some("x0 = 2".to_string()),
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("calc-limits-continuity".to_string()),
                 }
             }
@@ -2951,6 +3253,7 @@ impl ProblemGenerator {
                             canon.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("calc-derivatives-rules".to_string()),
                 }
             }
@@ -3014,6 +3317,7 @@ impl ProblemGenerator {
                             format!("{}", det),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("adv-partial-grad".to_string()),
                 }
             }
@@ -3082,6 +3386,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("trig-polar-parametric".to_string()),
                 }
             }
@@ -3145,6 +3450,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("adv-partial-grad".to_string()),
                 }
             }
@@ -3213,6 +3519,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("adv-vector-fields".to_string()),
                 }
             }
@@ -3288,6 +3595,7 @@ impl ProblemGenerator {
                             format!("{}", c1),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-linear-systems".to_string()),
                 }
             }
@@ -3363,6 +3671,7 @@ impl ProblemGenerator {
                             canon.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("lin-vectors-spans".to_string()),
                 }
             }
@@ -3435,6 +3744,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("lin-matrices-maps".to_string()),
                 }
             }
@@ -3505,6 +3815,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("trig-polar-parametric".to_string()),
                 }
             }
@@ -3574,6 +3885,7 @@ impl ProblemGenerator {
                             format!("{}", l1),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-quadratics".to_string()),
                 }
             }
@@ -3650,6 +3962,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("lin-matrices-maps".to_string()),
                 }
             }
@@ -3717,6 +4030,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("calc-integration-tech".to_string()),
                 }
             }
@@ -3781,6 +4095,7 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("trig-graphs-waves".to_string()),
                     }
                 } else {
@@ -3841,6 +4156,7 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: None,
                         remediate_module_id: Some("alg-quadratics".to_string()),
                     }
                 }
@@ -3921,6 +4237,7 @@ impl ProblemGenerator {
                             format!("{}", disc),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("lin-eigenvalues-diag".to_string()),
                 }
             }
@@ -3985,6 +4302,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-polynomial-rational".to_string()),
                 }
             }
@@ -4051,6 +4369,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("deq-first-order".to_string()),
                 }
             }
@@ -4117,6 +4436,7 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("deq-second-order-osc".to_string()),
                 }
             }
@@ -4216,6 +4536,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-polynomial-rational".to_string()),
                 }
             }
@@ -4311,6 +4632,7 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: None,
                     remediate_module_id: Some("alg-exp-log".to_string()),
                 }
             }
@@ -4365,6 +4687,15 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "t".to_string(),
+                            x_range: Some([0.0, 4.0 / (rate as f64)]),
+                            primary_expr: Some(format!("{}*exp(-{}*t)", rate, rate)),
+                            primary_label: Some(format!("PDF f(t) = {}e^(-{}t)", rate, rate)),
+                            secondary_expr: Some(expected),
+                            secondary_label: Some("CDF F(t)".to_string()),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-integration-tech".to_string()),
                     }
                 } else {
@@ -4419,6 +4750,16 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "t".to_string(),
+                            x_range: Some([0.0, t0 as f64 + 4.0 / (rate as f64)]),
+                            primary_expr: Some(format!("{}*exp(-{}*t)", rate, rate)),
+                            primary_label: Some(format!("Exp PDF f(t) = {}e^(-{}t)", rate, rate)),
+                            shade_interval: Some([t0 as f64, t0 as f64 + 4.0 / (rate as f64)]),
+                            vline_x: Some(t0 as f64),
+                            vline_label: Some(format!("t0 = {}", t0)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-integration-tech".to_string()),
                     }
                 }
@@ -4492,6 +4833,15 @@ impl ProblemGenerator {
                             disp.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "x".to_string(),
+                        x_range: Some([(-3.5_f64).min(expected - 0.8), (3.5_f64).max(expected + 0.8)]),
+                        primary_expr: Some("exp(-0.5*x^2)/sqrt(2*pi)".to_string()),
+                        primary_label: Some("Standard Normal N(0,1) PDF".to_string()),
+                        vline_x: Some(expected),
+                        vline_label: Some(format!("Z = {:.3}", expected)),
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("alg-radicals-exponents".to_string()),
                 }
             }
@@ -4547,6 +4897,15 @@ impl ProblemGenerator {
                                 expected.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([0.05, ((n as f64 / sum_t as f64) * 3.0).max(1.5)]),
+                            primary_expr: Some(format!("{}*ln(x) - {}*x", n, sum_t)),
+                            primary_label: Some(format!("l(x) = {}ln(x) - {}x", n, sum_t)),
+                            secondary_expr: Some(expected),
+                            secondary_label: Some("Score l'(x)".to_string()),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-derivatives-rules".to_string()),
                     }
                 } else {
@@ -4601,6 +4960,16 @@ impl ProblemGenerator {
                                 disp.clone(),
                             ),
                         ],
+                        visual: Some(WalkthroughVisual {
+                            var: "x".to_string(),
+                            x_range: Some([0.05, ((n as f64 / sum_t as f64) * 3.0).max(1.5)]),
+                            primary_expr: Some(format!("{}*ln(x) - {}*x", n, sum_t)),
+                            primary_label: Some(format!("l(lambda) = {}ln(lambda) - {}lambda", n, sum_t)),
+                            highlight_points: vec![[expected, (n as f64) * expected.ln() - (sum_t as f64) * expected]],
+                            vline_x: Some(expected),
+                            vline_label: Some(format!("lambda_hat = {:.3}", expected)),
+                            ..Default::default()
+                        }),
                         remediate_module_id: Some("calc-implicit-opt".to_string()),
                     }
                 }
@@ -4673,6 +5042,14 @@ impl ProblemGenerator {
                             expected.clone(),
                         ),
                     ],
+                    visual: Some(WalkthroughVisual {
+                        var: "x".to_string(),
+                        x_range: Some([-0.5, 2.5]),
+                        primary_expr: Some(expected),
+                        primary_label: Some("OLS y_hat(x)".to_string()),
+                        highlight_points: vec![[0.0, y0 as f64], [1.0, y1 as f64], [2.0, y2 as f64]],
+                        ..Default::default()
+                    }),
                     remediate_module_id: Some("lin-orthogonality-lsq".to_string()),
                 }
             }
@@ -4761,5 +5138,77 @@ mod tests {
         let vec_tex = plain_input_to_latex("<2*x, -cos(pi*y)>").expect("parseable 2D vector");
         assert!(vec_tex.contains(r"\langle"));
         assert!(vec_tex.contains(r"\pi"));
+    }
+
+    #[test]
+    fn walkthrough_visuals_cover_integrands_tangents_and_mle_parameters() {
+        // Definite-integral modules must provide integrand primary_expr and valid shade_interval [a, b]
+        for module_id in ["calc-integrals-ftc", "calc-integration-tech", "sta-continuous-pdf-cdf"] {
+            let mut found_shaded = false;
+            for seed in 0..8u64 {
+                let p = ProblemGenerator::generate(module_id, seed);
+                if let Some([a, b]) = p.visual.shade_interval {
+                    assert!(a < b, "{} shade_interval must satisfy a < b", module_id);
+                    let expr_str = p
+                        .visual
+                        .primary_expr
+                        .as_deref()
+                        .unwrap_or_else(|| panic!("{} missing visual.primary_expr", module_id));
+                    assert!(
+                        Expr::parse(expr_str).is_ok(),
+                        "{} visual.primary_expr '{}' failed to parse",
+                        module_id,
+                        expr_str
+                    );
+                    found_shaded = true;
+                }
+            }
+            assert!(found_shaded, "{} never produced a shaded integral walkthrough", module_id);
+        }
+
+        // Derivative / tangent modules must supply parseable f(x) and consistent tangent slope
+        for module_id in ["calc-derivatives-rules", "calc-implicit-opt", "not-calculus-operators"] {
+            let mut found_tangent = false;
+            for seed in 0..8u64 {
+                let p = ProblemGenerator::generate(module_id, seed);
+                if let (Some([x0, y0]), Some(slope)) = (p.visual.tangent_point, p.visual.tangent_slope) {
+                    let prim = p.visual.primary_expr.as_deref().expect("primary_expr");
+                    let ast = Expr::parse(prim).expect("parse primary_expr");
+                    let eval_y = ast.eval_1d(&p.visual.var, x0);
+                    assert!(
+                        (eval_y - y0).abs() < 1e-4,
+                        "{} tangent_point y0={} mismatches f({})={}",
+                        module_id,
+                        y0,
+                        x0,
+                        eval_y
+                    );
+                    let h = 1e-6;
+                    let fd = (ast.eval_1d(&p.visual.var, x0 + h) - ast.eval_1d(&p.visual.var, x0 - h))
+                        / (2.0 * h);
+                    assert!(
+                        (fd - slope).abs() < 1e-3,
+                        "{} tangent_slope={} mismatches finite diff {}",
+                        module_id,
+                        slope,
+                        fd
+                    );
+                    found_tangent = true;
+                }
+            }
+            assert!(found_tangent, "{} never produced tangent geometry", module_id);
+        }
+
+        // sta-mle-confidence must match generated parameters (never hardcoded "5*ln(x) - 12*x")
+        let mut saw_dynamic = false;
+        for seed in 0..8u64 {
+            let p = ProblemGenerator::generate("sta-mle-confidence", seed);
+            let prim = p.visual.primary_expr.as_deref().expect("MLE primary_expr");
+            if prim != "5*ln(x) - 12*x" {
+                saw_dynamic = true;
+            }
+            assert!(Expr::parse(prim).is_ok());
+        }
+        assert!(saw_dynamic, "sta-mle-confidence visual.primary_expr appeared static");
     }
 }

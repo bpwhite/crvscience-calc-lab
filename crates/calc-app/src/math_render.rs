@@ -73,6 +73,7 @@ pub enum MatrixStyle {
 pub enum GlyphKind {
     Pi,
     Theta,
+    ThetaCap,
     Lambda,
     Alpha,
     Beta,
@@ -164,6 +165,57 @@ pub enum MathNode {
 // UNICODE -> LATEX CONVERTER (for Notation Studio & Lesson Identities)
 // =========================================================================
 
+fn is_plain_text_latex_cmd(cmd: &str) -> bool {
+    matches!(cmd, "text" | "mathrm" | "operatorname" | "mathbf")
+}
+
+fn find_matching_delim(chars: &[char], open_idx: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut idx = open_idx;
+    while idx < chars.len() {
+        if chars[idx] == open {
+            depth += 1;
+        } else if chars[idx] == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(idx);
+            }
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn greek_or_char_latex(ch: char) -> String {
+    match ch {
+        'θ' => r"\theta".to_string(),
+        'λ' => r"\lambda".to_string(),
+        'α' => r"\alpha".to_string(),
+        'β' => r"\beta".to_string(),
+        'γ' => r"\gamma".to_string(),
+        'δ' => r"\delta".to_string(),
+        'ε' => r"\varepsilon".to_string(),
+        'μ' => r"\mu".to_string(),
+        'σ' => r"\sigma".to_string(),
+        'φ' => r"\phi".to_string(),
+        'ω' => r"\omega".to_string(),
+        _ => ch.to_string(),
+    }
+}
+
+fn is_differential_token(chars: &[char], idx: usize) -> bool {
+    if idx + 1 >= chars.len() || chars[idx] != 'd' {
+        return false;
+    }
+    let second = chars[idx + 1];
+    let is_diff_var = matches!(second, 'x' | 'y' | 'z' | 't' | 'u' | 's' | 'r' | 'A' | 'V' | 'S');
+    if !is_diff_var {
+        return false;
+    }
+    let after = chars.get(idx + 2).copied();
+    after.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_')
+}
+
 pub fn unicode_math_to_latex(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 32);
     let chars: Vec<char> = input.chars().collect();
@@ -172,21 +224,17 @@ pub fn unicode_math_to_latex(input: &str) -> String {
         let ch = chars[i];
         // Combined character checks (e.g. θ + combining circumflex, x + combining dot/bar)
         if i + 1 < chars.len() && chars[i + 1] == '\u{0302}' {
-            if ch == 'θ' {
-                out.push_str(r"\hat{\theta}");
-            } else {
-                out.push_str(&format!(r"\hat{{{}}}", ch));
-            }
+            out.push_str(&format!(r"\hat{{{}}}", greek_or_char_latex(ch)));
             i += 2;
             continue;
         }
         if i + 1 < chars.len() && chars[i + 1] == '\u{0304}' {
-            out.push_str(&format!(r"\bar{{{}}}", ch));
+            out.push_str(&format!(r"\bar{{{}}}", greek_or_char_latex(ch)));
             i += 2;
             continue;
         }
         if i + 1 < chars.len() && chars[i + 1] == '\u{0307}' {
-            out.push_str(&format!(r"\dot{{{}}}", ch));
+            out.push_str(&format!(r"\dot{{{}}}", greek_or_char_latex(ch)));
             i += 2;
             continue;
         }
@@ -200,17 +248,21 @@ pub fn unicode_math_to_latex(input: &str) -> String {
             '↦' => out.push_str(r"\mapsto "),
             '→' => out.push_str(r"\to "),
             '⇒' => out.push_str(r"\Rightarrow "),
+            '⇔' => out.push_str(r"\iff "),
             '≡' => out.push_str(r"\equiv "),
             '∘' => out.push_str(r"\circ "),
-            '∑' => out.push_str(r"\sum"),
-            '∏' => out.push_str(r"\prod"),
+            '∑' | 'Σ' => out.push_str(r"\sum"),
+            '∏' | 'Π' => out.push_str(r"\prod"),
             '∫' => out.push_str(r"\int"),
             '∮' => out.push_str(r"\oint"),
             '∬' => out.push_str(r"\iint"),
             '∇' => out.push_str(r"\nabla "),
             '∂' => out.push_str(r"\partial "),
             'Δ' => out.push_str(r"\Delta "),
+            'Θ' => out.push_str(r"\Theta "),
             'α' => out.push_str(r"\alpha "),
+            'β' => out.push_str(r"\beta "),
+            'γ' => out.push_str(r"\gamma "),
             'ε' => out.push_str(r"\varepsilon "),
             'δ' => out.push_str(r"\delta "),
             'θ' => out.push_str(r"\theta "),
@@ -227,20 +279,99 @@ pub fn unicode_math_to_latex(input: &str) -> String {
             'ᵀ' => out.push_str(r"^{T}"),
             '²' => out.push_str(r"^{2}"),
             '³' => out.push_str(r"^{3}"),
+            'ⁿ' => out.push_str(r"^{n}"),
+            'ᵐ' => out.push_str(r"^{m}"),
             '₀' => out.push_str(r"_{0}"),
             '₁' => out.push_str(r"_{1}"),
             '₂' => out.push_str(r"_{2}"),
             '√' => out.push_str(r"\sqrt"),
-            '·' => out.push_str(r"\cdot "),
+            '·' | '•' => out.push_str(r"\cdot "),
             '×' => out.push_str(r"\times "),
+            '−' => out.push('-'),
             '≤' => out.push_str(r"\le "),
             '≥' => out.push_str(r"\ge "),
             '≠' => out.push_str(r"\ne "),
             '≈' => out.push_str(r"\approx "),
             '±' => out.push_str(r"\pm "),
             'ẋ' => out.push_str(r"\dot{x}"),
+            'ẍ' => out.push_str(r"\ddot{x}"),
             '∞' => out.push_str(r"\infty "),
             '¬' => out.push_str(r"\neg "),
+            '_' | '^' => {
+                out.push(ch);
+                if chars.get(i + 1) == Some(&'{') {
+                    if let Some(close_idx) = find_matching_delim(&chars, i + 1, '{', '}') {
+                        let inner: String = chars[i + 2..close_idx].iter().collect();
+                        if ch == '_' {
+                            if let Some((lo, hi)) = inner.split_once("..") {
+                                out.push('{');
+                                out.push_str(&unicode_math_to_latex(lo));
+                                out.push_str("}^{");
+                                out.push_str(&unicode_math_to_latex(hi));
+                                out.push('}');
+                                i = close_idx + 1;
+                                continue;
+                            }
+                        }
+                        out.push('{');
+                        out.push_str(&unicode_math_to_latex(&inner));
+                        out.push('}');
+                        i = close_idx + 1;
+                        continue;
+                    }
+                } else if chars.get(i + 1) == Some(&'(') {
+                    if let Some(close_idx) = find_matching_delim(&chars, i + 1, '(', ')') {
+                        let inner: String = chars[i + 1..=close_idx].iter().collect();
+                        out.push('{');
+                        out.push_str(&unicode_math_to_latex(&inner));
+                        out.push('}');
+                        i = close_idx + 1;
+                        continue;
+                    }
+                } else if chars.get(i + 1) == Some(&'-')
+                    && chars.get(i + 2).is_some_and(|c| c.is_ascii_digit())
+                {
+                    let mut j = i + 2;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    let num: String = chars[i + 1..j].iter().collect();
+                    out.push('{');
+                    out.push_str(&num);
+                    out.push('}');
+                    i = j;
+                    continue;
+                } else if chars.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric()) {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j].is_ascii_alphanumeric() {
+                        j += 1;
+                    }
+                    let ident: String = chars[i + 1..j].iter().collect();
+                    if ident.chars().count() > 1 {
+                        out.push('{');
+                        out.push_str(&unicode_math_to_latex(&ident));
+                        out.push('}');
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            '{' => {
+                // Convert standalone set-builder braces `{ x in R : ... }` into escaped `\{ ... \}`
+                let prev = i.checked_sub(1).and_then(|k| chars.get(k).copied());
+                let is_script_group = matches!(prev, Some('_') | Some('^') | Some('\\'));
+                if !is_script_group {
+                    if let Some(close_idx) = find_matching_delim(&chars, i, '{', '}') {
+                        let inner: String = chars[i + 1..close_idx].iter().collect();
+                        out.push_str(r"\{");
+                        out.push_str(&unicode_math_to_latex(&inner));
+                        out.push_str(r"\}");
+                        i = close_idx + 1;
+                        continue;
+                    }
+                }
+                out.push('{');
+            }
             ' ' => {
                 // Collapse long ASCII padding runs in notation strings into clean LaTeX quad spacing
                 let mut sp = 0;
@@ -249,6 +380,13 @@ pub fn unicode_math_to_latex(input: &str) -> String {
                 }
                 if sp >= 3 {
                     out.push_str(r"\quad ");
+                } else if sp == 1
+                    && i > 0
+                    && is_differential_token(&chars, i + 1)
+                    && (chars[i - 1].is_ascii_alphanumeric()
+                        || matches!(chars[i - 1], ')' | ']' | '}' | 'ᵀ' | '²' | '³'))
+                {
+                    out.push_str(r"\,");
                 } else {
                     out.push(' ');
                 }
@@ -260,49 +398,182 @@ pub fn unicode_math_to_latex(input: &str) -> String {
                 let rem: String = chars[i..].iter().collect();
                 let word_boundary_before =
                     i == 0 || (!chars[i - 1].is_ascii_alphanumeric() && chars[i - 1] != '\\');
-                if rem.starts_with("d_Omega") && word_boundary_before {
+                let word_boundary_after = |len: usize| -> bool {
+                    chars
+                        .get(i + len)
+                        .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != '_')
+                };
+                if rem.starts_with("double_integral")
+                    && word_boundary_before
+                    && chars
+                        .get(i + 15)
+                        .is_none_or(|c| !c.is_ascii_alphanumeric())
+                {
+                    out.push_str(r"\iint");
+                    i += 15;
+                    continue;
+                } else if rem.starts_with("theta_hat") && word_boundary_before && word_boundary_after(9) {
+                    out.push_str(r"\hat{\theta}");
+                    i += 9;
+                    continue;
+                } else if rem.starts_with("lambda_hat") && word_boundary_before && word_boundary_after(10) {
+                    out.push_str(r"\hat{\lambda}");
+                    i += 10;
+                    continue;
+                } else if rem.starts_with("x_bar") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\bar{x}");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("y_hat") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\hat{y}");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("d_Omega") && word_boundary_before && word_boundary_after(7) {
                     out.push_str(r"\partial \Omega ");
                     i += 7;
                     continue;
-                } else if rem.starts_with("Omega") && word_boundary_before {
+                } else if rem.starts_with("Omega") && word_boundary_before && word_boundary_after(5) {
                     out.push_str(r"\Omega ");
                     i += 5;
                     continue;
-                } else if rem.starts_with("integral") && word_boundary_before {
+                } else if rem.starts_with("Theta") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\Theta ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("integral")
+                    && word_boundary_before
+                    && chars
+                        .get(i + 8)
+                        .is_none_or(|c| !c.is_ascii_alphanumeric())
+                {
                     out.push_str(r"\int");
                     i += 8;
                     continue;
-                } else if rem.starts_with("oint") && word_boundary_before {
+                } else if rem.starts_with("oint")
+                    && word_boundary_before
+                    && chars
+                        .get(i + 4)
+                        .is_none_or(|c| !c.is_ascii_alphanumeric())
+                {
                     out.push_str(r"\oint");
                     i += 4;
                     continue;
+                } else if rem.starts_with("lim_") && word_boundary_before {
+                    out.push_str(r"\lim");
+                    i += 3;
+                    continue;
+                } else if rem.starts_with("sum_") && word_boundary_before {
+                    out.push_str(r"\sum");
+                    i += 3;
+                    continue;
+                } else if rem.starts_with("prod_") && word_boundary_before {
+                    out.push_str(r"\prod");
+                    i += 4;
+                    continue;
+                } else if rem.starts_with("sqrt(") && word_boundary_before {
+                    if let Some(close_idx) = find_matching_delim(&chars, i + 4, '(', ')') {
+                        let inner: String = chars[i + 5..close_idx].iter().collect();
+                        out.push_str(r"\sqrt{");
+                        out.push_str(&unicode_math_to_latex(&inner));
+                        out.push('}');
+                        i = close_idx + 1;
+                        continue;
+                    }
                 } else if rem.starts_with("argmax") && word_boundary_before {
                     out.push_str(r"\operatorname{argmax}");
                     i += 6;
                     continue;
-                } else if rem.starts_with("grad") && word_boundary_before {
+                } else if rem.starts_with("grad") && word_boundary_before && word_boundary_after(4) {
                     out.push_str(r"\operatorname{grad}");
-                    i += 4;
+                    if chars.get(i + 4) == Some(&' ')
+                        && chars.get(i + 5).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '(')
+                    {
+                        out.push_str(r"\,");
+                        i += 5;
+                    } else {
+                        i += 4;
+                    }
                     continue;
-                } else if rem.starts_with("div")
-                    && word_boundary_before
-                    && rem
-                        .chars()
-                        .nth(3)
-                        .is_none_or(|c| !c.is_ascii_alphanumeric())
-                {
+                } else if rem.starts_with("div") && word_boundary_before && word_boundary_after(3) {
                     out.push_str(r"\operatorname{div}");
+                    if chars.get(i + 3) == Some(&' ')
+                        && chars.get(i + 4).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '(')
+                    {
+                        out.push_str(r"\,");
+                        i += 4;
+                    } else {
+                        i += 3;
+                    }
+                    continue;
+                } else if rem.starts_with("curl") && word_boundary_before && word_boundary_after(4) {
+                    out.push_str(r"\operatorname{curl}");
+                    if chars.get(i + 4) == Some(&' ')
+                        && chars.get(i + 5).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '(')
+                    {
+                        out.push_str(r"\,");
+                        i += 5;
+                    } else {
+                        i += 4;
+                    }
+                    continue;
+                } else if rem.starts_with("atan(") && word_boundary_before {
+                    out.push_str(r"\arctan(");
+                    i += 5;
+                    continue;
+                } else if let Some(fn_name) = ["exp", "ln", "log", "sin", "cos", "tan", "sec", "csc", "cot", "det", "tr"]
+                    .iter()
+                    .find(|&&kw| word_boundary_before && rem.starts_with(kw) && chars.get(i + kw.len()) == Some(&'('))
+                {
+                    out.push('\\');
+                    out.push_str(fn_name);
+                    out.push('(');
+                    i += fn_name.len() + 1;
+                    continue;
+                } else if rem.starts_with("inf") && word_boundary_before && word_boundary_after(3) {
+                    out.push_str(r"\infty ");
                     i += 3;
                     continue;
-                } else if rem.starts_with("curl") && word_boundary_before {
-                    out.push_str(r"\operatorname{curl}");
-                    i += 4;
+                } else if rem.starts_with("pi") && word_boundary_before && word_boundary_after(2) {
+                    out.push_str(r"\pi ");
+                    i += 2;
+                    continue;
+                } else if rem.starts_with("theta") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\theta ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("lambda") && word_boundary_before && word_boundary_after(6) {
+                    out.push_str(r"\lambda ");
+                    i += 6;
+                    continue;
+                } else if rem.starts_with("epsilon") && word_boundary_before && word_boundary_after(7) {
+                    out.push_str(r"\varepsilon ");
+                    i += 7;
+                    continue;
+                } else if rem.starts_with("delta") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\delta ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("sigma") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\sigma ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("alpha") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\alpha ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("omega") && word_boundary_before && word_boundary_after(5) {
+                    out.push_str(r"\omega ");
+                    i += 5;
+                    continue;
+                } else if rem.starts_with("mu") && word_boundary_before && word_boundary_after(2) {
+                    out.push_str(r"\mu ");
+                    i += 2;
                     continue;
                 } else if rem.starts_with("s.t.") {
                     out.push_str(r"\text{s.t.}");
                     i += 4;
                     continue;
-                } else if rem.starts_with("vs") && i > 0 && chars[i - 1] == ' ' {
+                } else if rem.starts_with("vs") && i > 0 && chars[i - 1] == ' ' && word_boundary_after(2) {
                     out.push_str(r"\text{vs}");
                     i += 2;
                     continue;
@@ -322,8 +593,16 @@ pub fn unicode_math_to_latex(input: &str) -> String {
                     out.push_str(r"\ne ");
                     i += 2;
                     continue;
+                } else if rem.starts_with("|->") {
+                    out.push_str(r"\mapsto ");
+                    i += 3;
+                    continue;
                 } else if rem.starts_with("->") {
-                    out.push_str(r"\to ");
+                    if chars.get(i + 2) == Some(&' ') {
+                        out.push_str(r"\to");
+                    } else {
+                        out.push_str(r"\to ");
+                    }
                     i += 2;
                     continue;
                 } else if rem.starts_with("=>") {
@@ -419,11 +698,15 @@ pub fn ui_safe_text(s: &str) -> String {
             '₂' => out.push_str("_2"),
             'ẋ' => out.push_str("x_dot"),
             'ẍ' => out.push_str("x_ddot"),
+            '√' => out.push_str("sqrt"),
+            '≈' => out.push_str("~="),
+            '∞' => out.push_str("inf"),
             '≤' => out.push_str("<="),
             '≥' => out.push_str(">="),
             '≠' => out.push_str("!="),
             '¬' => out.push_str("not "),
             '•' => out.push('*'),
+            'Θ' => out.push_str("Theta"),
             other => out.push(other),
         }
         i += 1;
@@ -476,10 +759,64 @@ fn tokenize_latex(input: &str) -> Vec<Tok> {
                         j += 1;
                     }
                     let cmd: String = chars[i + 1..j].iter().collect();
-                    toks.push(Tok::Cmd(cmd));
+                    toks.push(Tok::Cmd(cmd.clone()));
                     // Consume single trailing whitespace after alpha command (TeX rule)
                     if j < chars.len() && chars[j] == ' ' {
                         j += 1;
+                    }
+                    if is_plain_text_latex_cmd(&cmd) {
+                        while j < chars.len() && chars[j].is_whitespace() {
+                            j += 1;
+                        }
+                        if j < chars.len() && chars[j] == '{' {
+                            toks.push(Tok::LBrace);
+                            j += 1;
+                            let mut depth = 1usize;
+                            while j < chars.len() && depth > 0 {
+                                match chars[j] {
+                                    '{' => {
+                                        depth += 1;
+                                        toks.push(Tok::LBrace);
+                                        j += 1;
+                                    }
+                                    '}' => {
+                                        depth -= 1;
+                                        toks.push(Tok::RBrace);
+                                        j += 1;
+                                    }
+                                    '\\' => {
+                                        if j + 1 >= chars.len() {
+                                            j += 1;
+                                        } else {
+                                            let esc = chars[j + 1];
+                                            if !esc.is_ascii_alphabetic() {
+                                                toks.push(Tok::Cmd(esc.to_string()));
+                                                j += 2;
+                                            } else {
+                                                let mut k = j + 1;
+                                                while k < chars.len() && chars[k].is_ascii_alphabetic() {
+                                                    k += 1;
+                                                }
+                                                let inner_cmd: String = chars[j + 1..k].iter().collect();
+                                                toks.push(Tok::Cmd(inner_cmd));
+                                                if k < chars.len() && chars[k] == ' ' {
+                                                    k += 1;
+                                                }
+                                                j = k;
+                                            }
+                                        }
+                                    }
+                                    c if c.is_whitespace() => {
+                                        toks.push(Tok::Text(' '));
+                                        j += 1;
+                                    }
+                                    other => {
+                                        toks.push(Tok::Text(other));
+                                        j += 1;
+                                    }
+                                }
+                            }
+                        }
                     }
                     i = j;
                 }
@@ -638,6 +975,11 @@ impl Parser {
                         }
                     }
                     Tok::Text(c) => s.push(c),
+                    Tok::LBracket => s.push('['),
+                    Tok::RBracket => s.push(']'),
+                    Tok::Amp => s.push('&'),
+                    Tok::Underscore => s.push('_'),
+                    Tok::Caret => s.push('^'),
                     Tok::Cmd(c) if c == "," => s.push(' '),
                     Tok::Cmd(c) if c == " " => s.push(' '),
                     Tok::Cmd(c) if c == "quad" => s.push_str("  "),
@@ -957,6 +1299,7 @@ impl Parser {
             }
             "pi" => MathNode::Glyph(GlyphKind::Pi),
             "theta" => MathNode::Glyph(GlyphKind::Theta),
+            "Theta" => MathNode::Glyph(GlyphKind::ThetaCap),
             "lambda" => MathNode::Glyph(GlyphKind::Lambda),
             "alpha" => MathNode::Glyph(GlyphKind::Alpha),
             "beta" => MathNode::Glyph(GlyphKind::Beta),
@@ -1193,7 +1536,7 @@ fn measure_node(ui: &Ui, node: &MathNode, font_size: f32) -> MeasuredBox {
                 GlyphKind::DoublePipe => font_size * 0.36,
                 GlyphKind::Infty => font_size * 0.92,
                 GlyphKind::MathbbR => font_size * 0.72,
-                GlyphKind::Forall | GlyphKind::Exists | GlyphKind::Nabla | GlyphKind::DeltaCap | GlyphKind::OmegaCap => {
+                GlyphKind::Forall | GlyphKind::Exists | GlyphKind::Nabla | GlyphKind::DeltaCap | GlyphKind::OmegaCap | GlyphKind::ThetaCap => {
                     font_size * 0.74
                 }
                 GlyphKind::CalL => font_size * 0.72,
@@ -1989,6 +2332,37 @@ fn draw_vector_glyph(
             painter.line_segment([Pos2::new(lx, b_y), Pos2::new(cx - w * 0.16, b_y)], st);
             painter.line_segment([Pos2::new(cx + w * 0.16, b_y), Pos2::new(rx, b_y)], st);
         }
+        GlyphKind::ThetaCap => {
+            let y_top = top + fs * 0.04;
+            let y_bot = bot - fs * 0.06;
+            let left_arc = cubic_bezier_points(
+                Pos2::new(cx, y_top),
+                Pos2::new(lx - w * 0.04, y_top),
+                Pos2::new(lx - w * 0.04, y_bot),
+                Pos2::new(cx, y_bot),
+                12,
+            );
+            let right_arc = cubic_bezier_points(
+                Pos2::new(cx, y_top),
+                Pos2::new(rx + w * 0.04, y_top),
+                Pos2::new(rx + w * 0.04, y_bot),
+                Pos2::new(cx, y_bot),
+                12,
+            );
+            painter.add(egui::Shape::line(left_arc, st));
+            painter.add(egui::Shape::line(right_arc, st));
+            let bar_hw = w * 0.24;
+            let serif_h = fs * 0.09;
+            painter.line_segment([Pos2::new(cx - bar_hw, mid), Pos2::new(cx + bar_hw, mid)], st);
+            painter.line_segment(
+                [Pos2::new(cx - bar_hw, mid - serif_h), Pos2::new(cx - bar_hw, mid + serif_h)],
+                st,
+            );
+            painter.line_segment(
+                [Pos2::new(cx + bar_hw, mid - serif_h), Pos2::new(cx + bar_hw, mid + serif_h)],
+                st,
+            );
+        }
         GlyphKind::To => {
             let head = fs * 0.14;
             painter.line_segment([Pos2::new(lx, mid), Pos2::new(rx, mid)], st);
@@ -2489,4 +2863,627 @@ pub fn paint_transformation_arrow(ui: &mut Ui, font_size: f32, color: Color32) -
         .inner_margin(egui::Margin::symmetric(2.0, 8.0))
         .show(ui, |ui| paint_latex(ui, r"\implies", font_size, color))
         .inner
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptSegment {
+    Prose(String),
+    Math(String),
+}
+
+fn contains_math_unicode(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '∀' | '∃'
+                | '∈'
+                | '⊆'
+                | 'ℝ'
+                | '↦'
+                | '→'
+                | '⇒'
+                | '⇔'
+                | '≡'
+                | '∘'
+                | '∑'
+                | '∏'
+                | '∫'
+                | '∬'
+                | '∮'
+                | '∇'
+                | '∂'
+                | 'Δ'
+                | 'Θ'
+                | 'α'
+                | 'β'
+                | 'γ'
+                | 'ε'
+                | 'δ'
+                | 'θ'
+                | 'λ'
+                | 'μ'
+                | 'σ'
+                | 'φ'
+                | 'ω'
+                | 'Ω'
+                | 'π'
+                | '‖'
+                | '⟨'
+                | '⟩'
+                | 'ᵀ'
+                | '²'
+                | '³'
+                | 'ⁿ'
+                | 'ᵐ'
+                | '₀'
+                | '₁'
+                | '₂'
+                | '√'
+                | '·'
+                | '•'
+                | '×'
+                | '−'
+                | '≤'
+                | '≥'
+                | '≠'
+                | '≈'
+                | '±'
+                | 'ẋ'
+                | 'ẍ'
+                | '∞'
+                | '¬'
+                | '\u{0302}'
+                | '\u{0304}'
+                | '\u{0307}'
+        )
+    })
+}
+
+fn looks_like_english_paren_group(inner: &str) -> bool {
+    let trimmed = inner.trim();
+    if trimmed.contains('=')
+        || trimmed.contains('<')
+        || trimmed.contains('>')
+        || trimmed.contains('^')
+        || trimmed.contains('*')
+        || contains_math_unicode(trimmed)
+    {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    let prose_starters = [
+        "you ",
+        "include ",
+        "express ",
+        "with ",
+        "for ",
+        "no ",
+        "valid ",
+        "in ",
+        "equivalently ",
+        "i.e.",
+        "constant ",
+        "enter ",
+    ];
+    if prose_starters.iter().any(|p| lower.starts_with(p)) {
+        return true;
+    }
+    let alpha_words = trimmed
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_alphabetic()))
+        .count();
+    alpha_words >= 3
+}
+
+fn tokenize_prompt_atoms(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut atoms = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+        let start = i;
+        while i < chars.len() && !chars[i].is_whitespace() {
+            match chars[i] {
+                '{' => {
+                    if let Some(close) = find_matching_delim(&chars, i, '{', '}') {
+                        i = close + 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                '[' => {
+                    if let Some(close) = find_matching_delim(&chars, i, '[', ']') {
+                        i = close + 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                '⟨' => {
+                    if let Some(close) = find_matching_delim(&chars, i, '⟨', '⟩') {
+                        i = close + 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                '(' => {
+                    if let Some(close) = find_matching_delim(&chars, i, '(', ')') {
+                        let inner: String = chars[i + 1..close].iter().collect();
+                        if looks_like_english_paren_group(&inner) {
+                            i += 1;
+                        } else {
+                            i = close + 1;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                '<' => {
+                    // Group vector angle-brackets `<P, Q>` if closed cleanly without `<=`
+                    if chars.get(i + 1) != Some(&'=') {
+                        if let Some(close) = find_matching_delim(&chars, i, '<', '>') {
+                            let inner: String = chars[i + 1..close].iter().collect();
+                            if !inner.contains('<') && !inner.is_empty() {
+                                i = close + 1;
+                                continue;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+        let atom: String = chars[start..i].iter().collect();
+        if !atom.is_empty() {
+            atoms.push(atom);
+        }
+    }
+    atoms
+}
+
+fn strip_trailing_sentence_punct(tok: &str) -> (&str, &str) {
+    let bytes = tok.as_bytes();
+    let mut end = tok.len();
+    while end > 0 && matches!(bytes[end - 1], b'.' | b',' | b';' | b':') {
+        end -= 1;
+    }
+    (&tok[..end], &tok[end..])
+}
+
+fn is_math_operator_token(t: &str) -> bool {
+    matches!(
+        t,
+        "+" | "-" | "*" | "=" | "~" | "." | "|" | ":" | "<" | ">" | "<=" | ">=" | "!=" | "->" | "=>" | "<=>" | "|->"
+    )
+}
+
+fn is_differential_word(t: &str) -> bool {
+    matches!(
+        t,
+        "dx" | "dy" | "dz" | "dt" | "du" | "ds" | "dr" | "dA" | "dV" | "dS"
+    )
+}
+
+fn is_strong_math_token(raw: &str) -> bool {
+    if raw.is_empty() || raw.contains("...") {
+        return false;
+    }
+    if contains_math_unicode(raw) {
+        return true;
+    }
+    if raw.contains('^')
+        || raw.contains('_')
+        || raw.contains('*')
+        || raw.contains('=')
+        || raw.contains("<=")
+        || raw.contains(">=")
+        || raw.contains("!=")
+        || raw.contains("->")
+        || raw.contains("=>")
+        || raw.contains("<=>")
+        || raw.contains("|->")
+        || raw.contains('\\')
+    {
+        return true;
+    }
+    if raw.contains('/')
+        && raw
+            .chars()
+            .any(|c| c.is_ascii_digit() || matches!(c, 'x' | 'y' | 't' | 'u' | 'd' | ')' | '(' | ']'))
+    {
+        return true;
+    }
+    if (raw.contains('(') || raw.contains('[') || raw.contains('{') || raw.contains('<'))
+        && !raw.starts_with('(')
+    {
+        // Function call, bracket vector/interval, or expression like f(x), E[...], L{...}
+        return true;
+    }
+    if (raw.starts_with('(') || raw.starts_with('[') || raw.starts_with('{') || raw.starts_with('<'))
+        && (raw.contains(',')
+            || raw.contains('+')
+            || raw.contains('-')
+            || raw.contains('*')
+            || raw.contains('/')
+            || raw.contains('^')
+            || raw.contains('_')
+            || raw.contains('=')
+            || raw.contains('<')
+            || raw.contains('>')
+            || raw.contains('|')
+            || contains_math_unicode(raw)
+            || raw.trim_matches(|c| matches!(c, '(' | ')' | '[' | ']')).len() <= 4)
+    {
+        return true;
+    }
+    if raw.starts_with("integral")
+        || raw.starts_with("double_integral")
+        || raw.starts_with("oint")
+        || raw.starts_with("argmax")
+        || raw.starts_with("sqrt(")
+        || raw.starts_with("exp(")
+        || raw.starts_with("ln(")
+        || raw.starts_with("sin(")
+        || raw.starts_with("cos(")
+        || raw.starts_with("tan(")
+        || raw.starts_with("atan(")
+        || raw.starts_with("sec(")
+    {
+        return true;
+    }
+    matches!(
+        raw,
+        "pi" | "inf" | "mu" | "sigma" | "theta" | "lambda" | "epsilon" | "delta" | "alpha" | "omega"
+    ) || is_differential_word(raw)
+}
+
+fn is_bridgeable_math_atom(t: &str) -> bool {
+    if is_math_operator_token(t) {
+        return true;
+    }
+    if t.parse::<f64>().is_ok() {
+        return true;
+    }
+    if t.len() == 1 && t.chars().all(|c| c.is_ascii_alphabetic()) {
+        return true;
+    }
+    matches!(t, "grad" | "div" | "curl")
+}
+
+fn split_prompt_segments(line: &str) -> Vec<PromptSegment> {
+    let atoms = tokenize_prompt_atoms(line);
+    if atoms.is_empty() {
+        return Vec::new();
+    }
+    let n = atoms.len();
+    let mut cores = Vec::with_capacity(n);
+    let mut puncts = Vec::with_capacity(n);
+    let mut is_math = vec![false; n];
+    for (idx, a) in atoms.iter().enumerate() {
+        let (core, punct) = strip_trailing_sentence_punct(a);
+        // Handle leading '(' from an English parenthetical split, e.g. "(t" in "(t >= 0)" or "(you"
+        is_math[idx] = is_strong_math_token(core);
+        cores.push(core);
+        puncts.push(punct);
+    }
+
+    // Propagate math status to adjacent bridgeable tokens (variables, numbers, operators)
+    // Only bridge across an operator/number/math-token, never across trailing sentence punctuation.
+    for _pass in 0..3 {
+        let prev = is_math.clone();
+        for idx in 0..n {
+            if prev[idx] {
+                continue;
+            }
+            let core = cores[idx];
+            if core.is_empty() {
+                continue;
+            }
+            let left_math_open = idx > 0 && prev[idx - 1] && puncts[idx - 1].is_empty();
+            let right_math = idx + 1 < n && prev[idx + 1];
+            let right_op = idx + 1 < n && is_math_operator_token(cores[idx + 1]);
+            let left_op = idx > 0 && is_math_operator_token(cores[idx - 1]) && puncts[idx - 1].is_empty();
+
+            if is_math_operator_token(core) && (left_math_open || right_math || (idx > 0 && is_bridgeable_math_atom(cores[idx - 1]) && idx + 1 < n && is_bridgeable_math_atom(cores[idx + 1]))) {
+                is_math[idx] = true;
+            } else if is_bridgeable_math_atom(core) {
+                if matches!(core, "grad" | "div" | "curl") && right_math {
+                    is_math[idx] = true;
+                } else if core.len() == 1 && core.chars().all(|c| c.is_ascii_alphabetic()) {
+                    // Single letter like 'S' in "S = ...", 'u' in "u = ...", or '0' in "<= 0"
+                    // Avoid promoting English article "a" unless adjacent to an operator
+                    let is_article_a = core == "a";
+                    if left_op || right_op || (!is_article_a && left_math_open && right_math) {
+                        is_math[idx] = true;
+                    } else if !is_article_a && left_math_open && contains_math_unicode(cores[idx - 1]) {
+                        // e.g. `uᵀ u`
+                        is_math[idx] = true;
+                    }
+                } else if core.parse::<f64>().is_ok() && (left_op || right_op || left_math_open) {
+                    is_math[idx] = true;
+                }
+            }
+        }
+    }
+
+    let mut segments: Vec<PromptSegment> = Vec::new();
+    let mut i = 0usize;
+    while i < n {
+        if is_math[i] {
+            let mut math_buf = String::new();
+            let mut trailing_punct = String::new();
+            while i < n && is_math[i] {
+                if !math_buf.is_empty() {
+                    math_buf.push(' ');
+                }
+                math_buf.push_str(cores[i]);
+                if !puncts[i].is_empty() {
+                    trailing_punct.push_str(puncts[i]);
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            segments.push(PromptSegment::Math(math_buf));
+            if !trailing_punct.is_empty() {
+                segments.push(PromptSegment::Prose(trailing_punct));
+            }
+        } else {
+            let mut prose_buf = String::new();
+            while i < n && !is_math[i] {
+                if !prose_buf.is_empty() {
+                    prose_buf.push(' ');
+                }
+                prose_buf.push_str(&atoms[i]);
+                i += 1;
+            }
+            if let Some(PromptSegment::Prose(prev)) = segments.last_mut() {
+                // Merge consecutive prose segments cleanly with a space after trailing punctuation
+                if !prev.ends_with('(') {
+                    prev.push(' ');
+                }
+                prev.push_str(&prose_buf);
+            } else {
+                segments.push(PromptSegment::Prose(prose_buf));
+            }
+        }
+    }
+    segments
+}
+
+pub fn paint_mixed_prompt(ui: &mut Ui, prompt: &str, font_size: f32, color: Color32) {
+    for raw_line in prompt.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            ui.add_space(3.0);
+            continue;
+        }
+        let segments = split_prompt_segments(trimmed);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.y = 3.0;
+            for (seg_idx, seg) in segments.iter().enumerate() {
+                match seg {
+                    PromptSegment::Prose(text) => {
+                        let starts_punct = text
+                            .chars()
+                            .next()
+                            .is_some_and(|c| matches!(c, '.' | ',' | ';' | ':'));
+                        if seg_idx > 0
+                            && starts_punct
+                            && matches!(segments.get(seg_idx - 1), Some(PromptSegment::Math(_)))
+                        {
+                            ui.add_space(-3.0);
+                        }
+                        ui.label(
+                            egui::RichText::new(ui_safe_text(text))
+                                .size(font_size)
+                                .color(color),
+                        );
+                    }
+                    PromptSegment::Math(expr) => {
+                        let tex = unicode_math_to_latex(expr);
+                        paint_latex(ui, &tex, font_size, color);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use calc_core::{build_curriculum, build_notation_lexicon, ProblemGenerator, ScienceDomain};
+
+    #[test]
+    fn parse_latex_preserves_spaces_inside_text_command() {
+        let ast = parse_latex(r"\text{Substitute } x = a^2");
+        let runs: Vec<String> = match &ast {
+            MathNode::Row(items) => items
+                .iter()
+                .filter_map(|node| match node {
+                    MathNode::Run { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => panic!("Expected Row root node, got {:?}", ast),
+        };
+        assert!(
+            runs.iter().any(|t| t == "Substitute "),
+            "Expected space-preserved 'Substitute ' run in {:?}",
+            runs
+        );
+
+        let ast2 = parse_latex(r"\mathrm{into reduced form}");
+        match ast2 {
+            MathNode::Run { text, .. } => assert_eq!(text, "into reduced form"),
+            other => panic!("Expected single Run node, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unicode_math_to_latex_covers_all_notation_lexicon_entries() {
+        let forbidden_raw = [
+            '∀', '∃', '∈', '⊆', 'ℝ', '↦', '→', '⇒', '⇔', '∑', '∏', '∫', '∬', '∮', '∇',
+            '∂', 'Δ', 'Θ', 'α', 'β', 'γ', 'ε', 'δ', 'θ', 'λ', 'μ', 'σ', 'φ', 'ω', 'Ω',
+            'π', '‖', '⟨', '⟩', 'ᵀ', '²', '³', 'ⁿ', 'ᵐ', '₀', '₁', '₂', '√', '·', '•',
+            '×', '−', '≤', '≥', '≠', '≈', '±', 'ẋ', 'ẍ', '∞', '¬',
+        ];
+        for entry in build_notation_lexicon() {
+            for sample in std::iter::once(entry.symbol_display)
+                .chain(std::iter::once(entry.plain_text_form))
+                .chain(entry.dialect_equivalents.iter().copied())
+            {
+                let tex = unicode_math_to_latex(sample);
+                for ch in &forbidden_raw {
+                    assert!(
+                        !tex.contains(*ch),
+                        "Raw math char '{}' leaked in latex '{}' for entry '{}'",
+                        ch,
+                        tex,
+                        entry.id
+                    );
+                }
+                let _parsed = parse_latex(&tex);
+            }
+        }
+
+        // Verify explicit extensions requested in R2.2
+        assert!(unicode_math_to_latex("Θ").contains(r"\Theta"));
+        assert!(matches!(
+            parse_latex(r"\Theta"),
+            MathNode::Glyph(GlyphKind::ThetaCap)
+        ));
+        assert!(unicode_math_to_latex("P ⇔ Q").contains(r"\iff"));
+        assert_eq!(unicode_math_to_latex("x − y"), "x - y");
+        assert!(unicode_math_to_latex("Π Σ").contains(r"\prod"));
+        assert!(unicode_math_to_latex("Π Σ").contains(r"\sum"));
+        assert!(unicode_math_to_latex("ℝⁿ → ℝᵐ").contains("^{n}"));
+        assert!(unicode_math_to_latex("ℝⁿ → ℝᵐ").contains("^{m}"));
+        assert!(unicode_math_to_latex("ẍ").contains(r"\ddot{x}"));
+        assert!(unicode_math_to_latex("a • b").contains(r"\cdot"));
+        assert!(unicode_math_to_latex("double_integral_D").contains(r"\iint"));
+        assert!(unicode_math_to_latex("sum_{k=0..inf}").contains(r"\sum_{k=0}^{\infty }"));
+        assert!(unicode_math_to_latex("prod_{i=1..n}").contains(r"\prod_{i=1}^{n}"));
+        assert!(unicode_math_to_latex("lim_{x -> 0}").contains(r"\lim_{x \to 0}"));
+        assert!(unicode_math_to_latex("sqrt(x^2 + 1)").contains(r"\sqrt{x^2 + 1}"));
+        assert!(unicode_math_to_latex("2*pi").contains(r"\pi"));
+        assert!(unicode_math_to_latex("theta_hat lambda_hat x_bar y_hat").contains(r"\hat{\theta}"));
+        assert!(unicode_math_to_latex("lambda_hat").contains(r"\hat{\lambda}"));
+        assert!(unicode_math_to_latex("x_bar").contains(r"\bar{x}"));
+        assert!(unicode_math_to_latex("y_hat").contains(r"\hat{y}"));
+    }
+
+    #[test]
+    fn ui_safe_text_has_no_tofu_glyphs_across_curriculum_and_lexicon() {
+        let tofu_risk_chars = [
+            '∀', '∃', '∈', '⊆', 'ℝ', '↦', '→', '⇒', '⇔', '∑', '∏', '∫', '∬', '∮', '∇',
+            '‖', '⟨', '⟩', 'ᵀ', '³', 'ⁿ', 'ᵐ', '₀', '₁', '₂', 'ẋ', 'ẍ', '√', '≈', '∞',
+            'Θ', '∘', '≡', '≤', '≥', '≠', '¬', '•', '\u{0302}', '\u{0304}', '\u{0307}',
+        ];
+        let check_clean = |label: &str, raw: &str| {
+            let safe = ui_safe_text(raw);
+            for ch in &tofu_risk_chars {
+                assert!(
+                    !safe.contains(*ch),
+                    "Tofu-risk char '{}' (U+{:04X}) remained in ui_safe_text({}) -> '{}'",
+                    ch,
+                    *ch as u32,
+                    label,
+                    safe
+                );
+            }
+        };
+
+        let catalog = build_curriculum();
+        assert_eq!(catalog.modules.len(), 48);
+        for spec in &catalog.modules {
+            check_clean(spec.id, spec.title);
+            check_clean(spec.id, spec.subtitle);
+            check_clean(spec.id, spec.summary);
+            check_clean(spec.id, spec.calculus_bridge);
+            for note in spec.first_principles_notes {
+                check_clean(spec.id, note);
+            }
+            for id_str in spec.key_identities {
+                check_clean(spec.id, id_str);
+            }
+            for dom in ScienceDomain::ALL {
+                if let Some(banner) = dom.context_banner(spec.stage, spec.id) {
+                    check_clean(spec.id, &banner);
+                }
+                for seed in [1u64, 2, 3, 101] {
+                    let prob = ProblemGenerator::generate_with_domain(spec.id, seed, dom);
+                    check_clean(spec.id, &prob.title);
+                    check_clean(spec.id, &prob.prompt);
+                    for h in &prob.hints {
+                        check_clean(spec.id, h);
+                    }
+                    for s in &prob.steps {
+                        check_clean(spec.id, &s.rule_name);
+                        check_clean(spec.id, &s.explanation);
+                    }
+                }
+            }
+        }
+
+        for entry in build_notation_lexicon() {
+            check_clean(entry.id, entry.name);
+            check_clean(entry.id, entry.spoken_phrasing);
+            check_clean(entry.id, entry.common_pitfall);
+            for pt in entry.anatomy_points {
+                check_clean(entry.id, pt);
+            }
+            for dom in ScienceDomain::ALL {
+                check_clean(entry.id, entry.domain_application(dom));
+            }
+        }
+        assert_eq!(ui_safe_text("Θ"), "Theta");
+    }
+
+    #[test]
+    fn split_prompt_segments_identifies_inline_math_spans() {
+        let segs = split_prompt_segments(
+            "Evaluate exactly: integral_{0..1} 2*x * exp(3*x^2) dx. (You may enter exact form in terms of exp(...) or e.)",
+        );
+        assert!(
+            segs.iter().any(|s| matches!(s, PromptSegment::Math(m) if m.contains("integral_{0..1}") && m.contains("dx"))),
+            "Expected integral math segment, got {:?}",
+            segs
+        );
+        assert!(
+            segs.iter().any(|s| matches!(s, PromptSegment::Prose(p) if p.contains("Evaluate exactly:"))),
+            "Expected prose prefix, got {:?}",
+            segs
+        );
+
+        let segs_mle = split_prompt_segments(
+            "Evaluate the parameter-estimator notation:   θ̂ = argmax_{θ ∈ ℝ} ( 5 - 2*(θ - (3))^2 ).",
+        );
+        assert!(
+            segs_mle.iter().any(|s| matches!(s, PromptSegment::Math(m) if m.contains("argmax_"))),
+            "Expected argmax math segment, got {:?}",
+            segs_mle
+        );
+
+        // Math parentheticals starting with prose-like words such as `(for x > 0)` must stay grouped as math.
+        assert!(!looks_like_english_paren_group("for x > 0"));
+        assert!(looks_like_english_paren_group("You may enter exact form"));
+        let segs_cond = split_prompt_segments("Compute the Laplace transform (for s > 2).");
+        assert!(
+            segs_cond
+                .iter()
+                .any(|s| matches!(s, PromptSegment::Math(m) if m.contains("(for s > 2)"))),
+            "Expected '(for s > 2)' to stay grouped as math, got {:?}",
+            segs_cond
+        );
+    }
 }

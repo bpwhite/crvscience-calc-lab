@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 use crate::app::{AppTab, NavCommand};
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
     is_module_unlocked, summarize_stages, CurriculumCatalog, ModuleMastery, ModuleSpec, Stage,
@@ -77,8 +78,12 @@ fn render_module_card(
                 }
             });
 
-            ui.label(RichText::new(spec.title).strong());
-            ui.label(RichText::new(spec.subtitle).small().weak());
+            ui.label(RichText::new(math_render::ui_safe_text(spec.title)).strong());
+            ui.label(
+                RichText::new(math_render::ui_safe_text(spec.subtitle))
+                    .small()
+                    .weak(),
+            );
 
             if !spec.prerequisites.is_empty() {
                 let prereq_codes: Vec<String> = spec

@@ -193,16 +193,30 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             d if d.is_ascii_digit() || d == '.' => {
                 let start = i;
                 let mut seen_dot = d == '.';
+                let mut seen_digit = d.is_ascii_digit();
                 i += 1;
                 while i < chars.len() {
                     let nc = chars[i];
                     if nc.is_ascii_digit() {
+                        seen_digit = true;
                         i += 1;
                     } else if nc == '.' && !seen_dot {
                         seen_dot = true;
                         i += 1;
                     } else {
                         break;
+                    }
+                }
+                if seen_digit && i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                    let mut exp_idx = i + 1;
+                    if exp_idx < chars.len() && (chars[exp_idx] == '+' || chars[exp_idx] == '-') {
+                        exp_idx += 1;
+                    }
+                    if exp_idx < chars.len() && chars[exp_idx].is_ascii_digit() {
+                        while exp_idx < chars.len() && chars[exp_idx].is_ascii_digit() {
+                            exp_idx += 1;
+                        }
+                        i = exp_idx;
                     }
                 }
                 let s: String = chars[start..i].iter().collect();
@@ -466,6 +480,32 @@ impl Expr {
             | Self::Div(a, b)
             | Self::Pow(a, b) => a.contains_var(target) || b.contains_var(target),
         }
+    }
+
+    /// Collects sorted, deduplicated variable identifiers appearing in the AST that are not in `allowed`.
+    pub fn unknown_vars(&self, allowed: &[&str]) -> Vec<String> {
+        fn walk(node: &Expr, allowed: &[&str], out: &mut std::collections::BTreeSet<String>) {
+            match node {
+                Expr::Const(_) | Expr::Pi | Expr::EulerE => {}
+                Expr::Var(v) => {
+                    if !allowed.iter().any(|&a| a == v) {
+                        out.insert(v.clone());
+                    }
+                }
+                Expr::Neg(a) | Expr::Func(_, a) => walk(a, allowed, out),
+                Expr::Add(a, b)
+                | Expr::Sub(a, b)
+                | Expr::Mul(a, b)
+                | Expr::Div(a, b)
+                | Expr::Pow(a, b) => {
+                    walk(a, allowed, out);
+                    walk(b, allowed, out);
+                }
+            }
+        }
+        let mut set = std::collections::BTreeSet::new();
+        walk(self, allowed, &mut set);
+        set.into_iter().collect()
     }
 
     pub fn differentiate(&self, var: &str) -> Self {
@@ -1354,5 +1394,54 @@ pub fn evaluate_field_2d(
         classification,
         divergence,
         curl_z,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_vars_identifies_unbound_identifiers() {
+        let e1 = Expr::parse("2*sin(x) + cos(pi*x) - exp(-x)").expect("parse valid x expr");
+        assert!(e1.unknown_vars(&["x"]).is_empty());
+
+        let e2 = Expr::parse("sin(t) + y*x + z").expect("parse multi-var expr");
+        assert_eq!(e2.unknown_vars(&["x"]), vec!["t", "y", "z"]);
+        assert_eq!(e2.unknown_vars(&["x", "y"]), vec!["t", "z"]);
+    }
+
+    #[test]
+    fn scientific_exponent_literals_lex_without_breaking_euler_e() {
+        let env = EvalEnv::new();
+        let v_neg = Expr::parse("1e-5")
+            .expect("parse 1e-5")
+            .eval(&env);
+        assert!((v_neg - 1e-5).abs() < 1e-15, "got {v_neg}");
+
+        let v_pos = Expr::parse("1.5e2")
+            .expect("parse 1.5e2")
+            .eval(&env);
+        assert!((v_pos - 150.0).abs() < 1e-12, "got {v_pos}");
+
+        let v_upper = Expr::parse("2.5E+3")
+            .expect("parse 2.5E+3")
+            .eval(&env);
+        assert!((v_upper - 2500.0).abs() < 1e-12, "got {v_upper}");
+
+        let v_euler = Expr::parse("2*e")
+            .expect("parse 2*e")
+            .eval(&env);
+        assert!((v_euler - 2.0 * std::f64::consts::E).abs() < 1e-12, "got {v_euler}");
+
+        let v_exp_x = Expr::parse("e^x")
+            .expect("parse e^x")
+            .eval_1d("x", 1.0);
+        assert!((v_exp_x - std::f64::consts::E).abs() < 1e-12, "got {v_exp_x}");
+
+        let v_e_minus_1 = Expr::parse("e-1")
+            .expect("parse e-1")
+            .eval(&env);
+        assert!((v_e_minus_1 - (std::f64::consts::E - 1.0)).abs() < 1e-12, "got {v_e_minus_1}");
     }
 }

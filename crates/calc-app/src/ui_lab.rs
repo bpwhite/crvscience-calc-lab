@@ -15,15 +15,19 @@
 
 use crate::theme::AcademicTheme;
 use calc_core::{
-    binomial_pmf, compute_bayes_binary, evaluate_1d_pde, evaluate_field_2d, exponential_cdf,
-    exponential_pdf, fit_ols_linear, normal_cdf, normal_pdf, poisson_pmf, riemann_sum,
-    solve_planar_system_rk4, taylor_polynomial_at, DistributionKind, EigenSpectrum2D, Expr,
-    LabPreset, Mat2, PdeInitialProfile, PdeKind, RiemannMethod,
+    binomial_pmf, compute_bayes_binary, evaluate_1d_pde, evaluate_1d_pde_custom, evaluate_field_2d,
+    exponential_cdf, exponential_pdf, extract_zero_level_segments, find_planar_equilibria,
+    fit_ols_linear, normal_cdf, normal_pdf, poisson_pmf, riemann_sum,
+    solve_planar_system_euler_timed, solve_planar_system_rk4, solve_planar_system_rk4_timed,
+    taylor_polynomial_at, DistributionKind, EigenSpectrum2D, EquilibriumPoint, Expr, LabPreset,
+    Mat2, PdeInitialProfile, PdeKind, PdeSnapshot, RiemannMethod,
 };
 use egui::{
     Color32, ComboBox, Context, Frame, Margin, RichText, Rounding, Slider, TextEdit, TextStyle, Ui,
 };
-use egui_plot::{Bar, BarChart, HLine, Legend, Line, Plot, Points, Polygon, VLine};
+use egui_plot::{
+    Bar, BarChart, HLine, Legend, Line, LineStyle, MarkerShape, Plot, Points, Polygon, VLine,
+};
 use std::f64::consts::PI;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,9 +106,17 @@ pub struct LabState {
     pub ode_rhs_q: String,
     pub ode_seed_x: f64,
     pub ode_seed_y: f64,
+    pub ode_dt: f64,
+    pub ode_t_max: f64,
     pub ode_show_ensemble: bool,
+    pub ode_show_nullclines: bool,
+    pub ode_show_equilibria: bool,
+    pub ode_show_euler: bool,
     pub pde_kind: PdeKind,
     pub pde_profile: PdeInitialProfile,
+    pub pde_use_custom: bool,
+    pub pde_custom_expr: String,
+    pub pde_show_truncation_t0: bool,
     pub pde_alpha: f64,
     pub pde_speed: f64,
     pub pde_time: f64,
@@ -170,9 +182,17 @@ impl Default for LabState {
             ode_rhs_q: "-2.0*x - 0.35*y".to_string(),
             ode_seed_x: 2.0,
             ode_seed_y: 0.0,
+            ode_dt: 0.05,
+            ode_t_max: 10.0,
             ode_show_ensemble: true,
+            ode_show_nullclines: true,
+            ode_show_equilibria: true,
+            ode_show_euler: true,
             pde_kind: PdeKind::HeatDiffusion,
             pde_profile: PdeInitialProfile::SquarePulse,
+            pde_use_custom: false,
+            pde_custom_expr: "x * (pi - x) * 0.4".to_string(),
+            pde_show_truncation_t0: true,
             pde_alpha: 0.16,
             pde_speed: 1.2,
             pde_time: 0.20,
@@ -305,6 +325,7 @@ impl LabState {
                 self.ode_submode = OdePdeSubmode::PdeEvolution1D;
                 self.pde_kind = *kind;
                 self.pde_profile = *profile;
+                self.pde_use_custom = false;
                 self.pde_alpha = *alpha;
                 self.pde_speed = *speed;
                 self.pde_time = *time_t;
@@ -1661,11 +1682,16 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                         .font(TextStyle::Monospace),
                 );
                 ui.checkbox(&mut state.ode_show_ensemble, "Show Background Portraits");
+                ui.checkbox(&mut state.ode_show_nullclines, "Nullclines");
+                ui.checkbox(&mut state.ode_show_equilibria, "Equilibria");
+                ui.checkbox(&mut state.ode_show_euler, "Compare Euler");
             });
 
             ui.horizontal_wrapped(|ui| {
                 ui.add(Slider::new(&mut state.ode_seed_x, -3.2..=3.2).text("Initial x(0)"));
                 ui.add(Slider::new(&mut state.ode_seed_y, -3.2..=3.2).text("Initial y(0)"));
+                ui.add(Slider::new(&mut state.ode_dt, 0.01..=0.25).text("Step dt"));
+                ui.add(Slider::new(&mut state.ode_t_max, 2.0..=20.0).text("T_max"));
                 ui.label(
                     RichText::new("(Click anywhere in phase plane to re-seed x(0), y(0))")
                         .small()
@@ -1688,117 +1714,307 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
             return;
         }
     };
+    let p_unknown = p_expr.unknown_vars(&["x", "y"]);
+    if !p_unknown.is_empty() {
+        ui.label(
+            RichText::new(format!(
+                "dx/dt unknown variable(s) {}; express P(x, y) in terms of x and y.",
+                p_unknown.join(", ")
+            ))
+            .color(theme.err_color()),
+        );
+        return;
+    }
+    let q_unknown = q_expr.unknown_vars(&["x", "y"]);
+    if !q_unknown.is_empty() {
+        ui.label(
+            RichText::new(format!(
+                "dy/dt unknown variable(s) {}; express Q(x, y) in terms of x and y.",
+                q_unknown.join(", ")
+            ))
+            .color(theme.err_color()),
+        );
+        return;
+    }
 
-    Plot::new("ode_phase_portrait_plot")
-        .height(390.0)
-        .data_aspect(1.0)
-        .legend(Legend::default())
-        .show(ui, |plot_ui| {
-            if plot_ui.response().clicked() {
-                if let Some(pt) = plot_ui.pointer_coordinate() {
-                    state.ode_seed_x = pt.x.clamp(-3.2, 3.2);
-                    state.ode_seed_y = pt.y.clamp(-3.2, 3.2);
-                }
-            }
+    let dt = state.ode_dt.clamp(0.01, 0.25);
+    let t_max = state.ode_t_max.clamp(2.0, 20.0);
+    let steps = ((t_max / dt).round() as usize).clamp(1, 2000);
+    let bwd_steps = ((t_max * 0.4 / dt).round() as usize).clamp(1, 800);
 
-            // Direction field quiver needles
-            let mut first_q = true;
-            for ix in -7..=7 {
-                for iy in -7..=7 {
-                    let x = (ix as f64) * 0.45;
-                    let y = (iy as f64) * 0.45;
-                    let u = p_expr.eval_2d(x, y);
-                    let v = q_expr.eval_2d(x, y);
-                    let norm = (u * u + v * v).sqrt();
-                    if norm.is_finite() && norm > 1e-6 {
-                        let len = 0.20;
-                        let ux = u / norm;
-                        let uy = v / norm;
-                        let tip = [x + len * ux, y + len * uy];
-                        let mut shaft = Line::new(vec![[x, y], tip])
-                            .color(Color32::from_rgba_unmultiplied(125, 145, 175, 125))
-                            .width(1.1);
-                        if first_q {
-                            shaft = shaft.name("Slope / Direction Field");
-                            first_q = false;
-                        }
-                        plot_ui.line(shaft);
+    let rk4_timed = solve_planar_system_rk4_timed(
+        &p_expr,
+        &q_expr,
+        state.ode_seed_x,
+        state.ode_seed_y,
+        dt,
+        steps,
+        4.8,
+    );
+    let euler_timed = if state.ode_show_euler {
+        solve_planar_system_euler_timed(
+            &p_expr,
+            &q_expr,
+            state.ode_seed_x,
+            state.ode_seed_y,
+            dt,
+            steps,
+            4.8,
+        )
+    } else {
+        Vec::new()
+    };
+    let bwd = solve_planar_system_rk4(
+        &p_expr,
+        &q_expr,
+        state.ode_seed_x,
+        state.ode_seed_y,
+        -dt,
+        bwd_steps,
+        4.8,
+    );
+    let p_nullcline = if state.ode_show_nullclines {
+        extract_zero_level_segments(&p_expr, -3.5, 3.5, -3.5, 3.5, 56)
+    } else {
+        Vec::new()
+    };
+    let q_nullcline = if state.ode_show_nullclines {
+        extract_zero_level_segments(&q_expr, -3.5, 3.5, -3.5, 3.5, 56)
+    } else {
+        Vec::new()
+    };
+    let equilibria: Vec<EquilibriumPoint> = if state.ode_show_equilibria {
+        find_planar_equilibria(&p_expr, &q_expr, -3.5, 3.5, -3.5, 3.5)
+    } else {
+        Vec::new()
+    };
+
+    ui.columns(2, |cols| {
+        let side = cols[0].available_width().clamp(300.0, 440.0);
+
+        Plot::new("ode_phase_portrait_plot")
+            .width(side)
+            .height(side)
+            .data_aspect(1.0)
+            .view_aspect(1.0)
+            .include_x(-3.5)
+            .include_x(3.5)
+            .include_y(-3.5)
+            .include_y(3.5)
+            .x_axis_label("x")
+            .y_axis_label("y")
+            .legend(Legend::default())
+            .show(&mut cols[0], |plot_ui| {
+                if plot_ui.response().clicked() {
+                    if let Some(pt) = plot_ui.pointer_coordinate() {
+                        state.ode_seed_x = pt.x.clamp(-3.2, 3.2);
+                        state.ode_seed_y = pt.y.clamp(-3.2, 3.2);
                     }
                 }
-            }
 
-            // Background ensemble orbits
-            if state.ode_show_ensemble {
-                let seeds = [
-                    (-2.2, -1.5),
-                    (-2.2, 1.5),
-                    (2.2, -1.5),
-                    (2.2, 1.5),
-                    (0.8, 2.0),
-                    (-0.8, -2.0),
-                    (1.2, 0.5),
-                    (-1.2, -0.5),
-                ];
-                let mut first_bg = true;
-                for (sx, sy) in seeds {
-                    let bg_traj = solve_planar_system_rk4(&p_expr, &q_expr, sx, sy, 0.025, 450, 4.5);
-                    if bg_traj.len() >= 2 {
-                        let mut line = Line::new(bg_traj)
-                            .color(Color32::from_rgba_unmultiplied(92, 180, 196, 120))
-                            .width(1.3);
-                        if first_bg {
-                            line = line.name("Ensemble RK4 Orbits");
-                            first_bg = false;
+                // 1. Direction field quiver needles
+                let mut first_q = true;
+                for ix in -7..=7 {
+                    for iy in -7..=7 {
+                        let x = (ix as f64) * 0.45;
+                        let y = (iy as f64) * 0.45;
+                        let u = p_expr.eval_2d(x, y);
+                        let v = q_expr.eval_2d(x, y);
+                        let norm = (u * u + v * v).sqrt();
+                        if norm.is_finite() && norm > 1e-6 {
+                            let len = 0.20;
+                            let ux = u / norm;
+                            let uy = v / norm;
+                            let tip = [x + len * ux, y + len * uy];
+                            let mut shaft = Line::new(vec![[x, y], tip])
+                                .color(Color32::from_rgba_unmultiplied(125, 145, 175, 125))
+                                .width(1.1);
+                            if first_q {
+                                shaft = shaft.name("Slope / Direction Field");
+                                first_q = false;
+                            }
+                            plot_ui.line(shaft);
+                        }
+                    }
+                }
+
+                // 2. Nullclines: dx/dt = 0 and dy/dt = 0
+                if state.ode_show_nullclines {
+                    let mut first_pn = true;
+                    for &(a, b) in &p_nullcline {
+                        let mut line = Line::new(vec![a, b])
+                            .color(Color32::from_rgb(76, 196, 208))
+                            .width(1.6)
+                            .style(LineStyle::dashed_dense());
+                        if first_pn {
+                            line = line.name("dx/dt = 0 Nullcline");
+                            first_pn = false;
+                        }
+                        plot_ui.line(line);
+                    }
+
+                    let mut first_qn = true;
+                    for &(a, b) in &q_nullcline {
+                        let mut line = Line::new(vec![a, b])
+                            .color(Color32::from_rgb(198, 126, 214))
+                            .width(1.6)
+                            .style(LineStyle::dashed_dense());
+                        if first_qn {
+                            line = line.name("dy/dt = 0 Nullcline");
+                            first_qn = false;
                         }
                         plot_ui.line(line);
                     }
                 }
-            }
 
-            // Highlighted primary forward + backward RK4 trajectories from user seed
-            let fwd = solve_planar_system_rk4(
-                &p_expr,
-                &q_expr,
-                state.ode_seed_x,
-                state.ode_seed_y,
-                0.02,
-                800,
-                4.8,
-            );
-            let bwd = solve_planar_system_rk4(
-                &p_expr,
-                &q_expr,
-                state.ode_seed_x,
-                state.ode_seed_y,
-                -0.02,
-                350,
-                4.8,
-            );
-            if bwd.len() >= 2 {
-                plot_ui.line(
-                    Line::new(bwd)
-                        .color(Color32::from_rgb(88, 166, 236))
-                        .width(1.8)
-                        .name("Backward Trajectory (t < 0)"),
-                );
-            }
-            if fwd.len() >= 2 {
-                plot_ui.line(
-                    Line::new(fwd)
+                // 3. Background ensemble RK4 orbits
+                if state.ode_show_ensemble {
+                    let seeds = [
+                        (-2.2, -1.5),
+                        (-2.2, 1.5),
+                        (2.2, -1.5),
+                        (2.2, 1.5),
+                        (0.8, 2.0),
+                        (-0.8, -2.0),
+                        (1.2, 0.5),
+                        (-1.2, -0.5),
+                    ];
+                    let mut first_bg = true;
+                    for (sx, sy) in seeds {
+                        let bg_traj =
+                            solve_planar_system_rk4(&p_expr, &q_expr, sx, sy, 0.025, 450, 4.5);
+                        if bg_traj.len() >= 2 {
+                            let mut line = Line::new(bg_traj)
+                                .color(Color32::from_rgba_unmultiplied(92, 180, 196, 120))
+                                .width(1.3);
+                            if first_bg {
+                                line = line.name("Ensemble RK4 Orbits");
+                                first_bg = false;
+                            }
+                            plot_ui.line(line);
+                        }
+                    }
+                }
+
+                // 4. Explicit Euler comparison trajectory
+                if state.ode_show_euler && euler_timed.len() >= 2 {
+                    let euler_xy: Vec<[f64; 2]> =
+                        euler_timed.iter().map(|pt| [pt[1], pt[2]]).collect();
+                    plot_ui.line(
+                        Line::new(euler_xy)
+                            .color(Color32::from_rgb(224, 98, 98))
+                            .width(1.8)
+                            .style(LineStyle::dashed_loose())
+                            .name("Explicit Euler (t >= 0)"),
+                    );
+                }
+
+                // 5. Backward & Forward RK4 trajectories
+                if bwd.len() >= 2 {
+                    plot_ui.line(
+                        Line::new(bwd)
+                            .color(Color32::from_rgb(88, 166, 236))
+                            .width(1.8)
+                            .name("Backward RK4 (t < 0)"),
+                    );
+                }
+                if rk4_timed.len() >= 2 {
+                    let rk4_xy: Vec<[f64; 2]> =
+                        rk4_timed.iter().map(|pt| [pt[1], pt[2]]).collect();
+                    plot_ui.line(
+                        Line::new(rk4_xy)
+                            .color(Color32::from_rgb(232, 168, 72))
+                            .width(2.6)
+                            .name("Forward RK4 (t >= 0)"),
+                    );
+                }
+
+                // 6. Equilibrium points (x*, y*)
+                if state.ode_show_equilibria && !equilibria.is_empty() {
+                    let eq_pts: Vec<[f64; 2]> = equilibria.iter().map(|e| [e.x, e.y]).collect();
+                    plot_ui.points(
+                        Points::new(eq_pts)
+                            .shape(MarkerShape::Diamond)
+                            .radius(6.5)
+                            .color(Color32::from_rgb(92, 198, 148))
+                            .name("Equilibria (x*, y*)"),
+                    );
+                }
+
+                // 7. Initial seed point (x(0), y(0))
+                plot_ui.points(
+                    Points::new(vec![[state.ode_seed_x, state.ode_seed_y]])
+                        .radius(6.0)
                         .color(Color32::from_rgb(232, 168, 72))
-                        .width(2.6)
-                        .name("Forward RK4 Trajectory (t >= 0)"),
+                        .name("Initial State (x(0), y(0))"),
                 );
-            }
-            plot_ui.points(
-                Points::new(vec![[state.ode_seed_x, state.ode_seed_y]])
-                    .radius(6.0)
-                    .color(Color32::from_rgb(232, 168, 72))
-                    .name("Initial State (x(0), y(0))"),
-            );
-        });
+            });
 
-    // Symbolic Jacobian Linearization at (x(0), y(0))
+        // Right Column: Paired x(t) and y(t) Time-Series (RK4 vs Explicit Euler)
+        let half_h = (side - 8.0) * 0.5;
+        let rk4_xt: Vec<[f64; 2]> = rk4_timed.iter().map(|pt| [pt[0], pt[1]]).collect();
+        let rk4_yt: Vec<[f64; 2]> = rk4_timed.iter().map(|pt| [pt[0], pt[2]]).collect();
+        let euler_xt: Vec<[f64; 2]> = euler_timed.iter().map(|pt| [pt[0], pt[1]]).collect();
+        let euler_yt: Vec<[f64; 2]> = euler_timed.iter().map(|pt| [pt[0], pt[2]]).collect();
+
+        Plot::new("ode_xt_plot")
+            .height(half_h)
+            .include_x(0.0)
+            .include_x(t_max)
+            .x_axis_label("t")
+            .y_axis_label("x(t)")
+            .legend(Legend::default())
+            .show(&mut cols[1], |plot_ui| {
+                if euler_xt.len() >= 2 {
+                    plot_ui.line(
+                        Line::new(euler_xt)
+                            .color(Color32::from_rgb(224, 98, 98))
+                            .width(1.8)
+                            .style(LineStyle::dashed_loose())
+                            .name("x_Euler(t)"),
+                    );
+                }
+                if rk4_xt.len() >= 2 {
+                    plot_ui.line(
+                        Line::new(rk4_xt)
+                            .color(Color32::from_rgb(232, 168, 72))
+                            .width(2.2)
+                            .name("x_RK4(t)"),
+                    );
+                }
+            });
+
+        cols[1].add_space(8.0);
+
+        Plot::new("ode_yt_plot")
+            .height(half_h)
+            .include_x(0.0)
+            .include_x(t_max)
+            .x_axis_label("t")
+            .y_axis_label("y(t)")
+            .legend(Legend::default())
+            .show(&mut cols[1], |plot_ui| {
+                if euler_yt.len() >= 2 {
+                    plot_ui.line(
+                        Line::new(euler_yt)
+                            .color(Color32::from_rgb(224, 98, 98))
+                            .width(1.8)
+                            .style(LineStyle::dashed_loose())
+                            .name("y_Euler(t)"),
+                    );
+                }
+                if rk4_yt.len() >= 2 {
+                    plot_ui.line(
+                        Line::new(rk4_yt)
+                            .color(Color32::from_rgb(88, 166, 236))
+                            .width(2.2)
+                            .name("y_RK4(t)"),
+                    );
+                }
+            });
+    });
+
+    // Symbolic Jacobian Linearization at (x(0), y(0)) + RK4 vs Euler + Equilibria Telemetry
     let px = p_expr.differentiate("x").eval_2d(state.ode_seed_x, state.ode_seed_y);
     let py = p_expr.differentiate("y").eval_2d(state.ode_seed_x, state.ode_seed_y);
     let qx = q_expr.differentiate("x").eval_2d(state.ode_seed_x, state.ode_seed_y);
@@ -1829,6 +2045,61 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                 ))
                 .monospace(),
             );
+            if state.ode_show_euler {
+                if let (Some(r_last), Some(e_last)) = (rk4_timed.last(), euler_timed.last()) {
+                    let sep = (r_last[1] - e_last[1]).hypot(r_last[2] - e_last[2]);
+                    ui.label(
+                        RichText::new(format!(
+                            "RK4 vs. Explicit Euler (dt = {:.3}, T = {:.1}):  RK4({:.2}) = ({:.4}, {:.4})  |  Euler({:.2}) = ({:.4}, {:.4})  |  ||Delta X(T)||_2 = {:.4}",
+                            dt,
+                            t_max,
+                            r_last[0],
+                            r_last[1],
+                            r_last[2],
+                            e_last[0],
+                            e_last[1],
+                            e_last[2],
+                            sep
+                        ))
+                        .monospace(),
+                    );
+                }
+            }
+            if state.ode_show_equilibria {
+                if equilibria.is_empty() {
+                    ui.label(
+                        RichText::new(
+                            "Detected Equilibria in [-3.5, 3.5]^2: None (no P(x*, y*) = Q(x*, y*) = 0 roots found in window)",
+                        )
+                        .monospace()
+                        .weak(),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(format!(
+                            "Detected Equilibria in [-3.5, 3.5]^2 ({} found):",
+                            equilibria.len()
+                        ))
+                        .strong()
+                        .small(),
+                    );
+                    for (idx, eq) in equilibria.iter().enumerate() {
+                        ui.label(
+                            RichText::new(format!(
+                                "  E{}: (x*, y*) = ({:.4}, {:.4})  |  tr(J) = {:.4}, det(J) = {:.4}, Delta = {:.4}  |  {}",
+                                idx + 1,
+                                eq.x,
+                                eq.y,
+                                eq.diagnostics.trace,
+                                eq.diagnostics.det,
+                                eq.diagnostics.discriminant,
+                                eq.diagnostics.phase_portrait_class
+                            ))
+                            .monospace(),
+                        );
+                    }
+                }
+            }
         });
 }
 
@@ -1858,18 +2129,39 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
                         }
                     });
 
-                ComboBox::from_label("Initial u(x, 0)")
-                    .selected_text(state.pde_profile.label())
-                    .show_ui(ui, |ui| {
-                        for p in [
-                            PdeInitialProfile::SquarePulse,
-                            PdeInitialProfile::PluckedTriangle,
-                            PdeInitialProfile::TwoModeHarmonic,
-                            PdeInitialProfile::LocalizedGaussian,
-                        ] {
-                            ui.selectable_value(&mut state.pde_profile, p, p.label());
-                        }
-                    });
+                ui.separator();
+                ui.selectable_value(&mut state.pde_use_custom, false, "Preset Profile");
+                ui.selectable_value(&mut state.pde_use_custom, true, "Custom Expr u(x, 0)");
+                ui.checkbox(&mut state.pde_show_truncation_t0, "Show M-Mode t=0 Sum");
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                if !state.pde_use_custom {
+                    ComboBox::from_label("Initial u(x, 0)")
+                        .selected_text(state.pde_profile.label())
+                        .show_ui(ui, |ui| {
+                            for p in [
+                                PdeInitialProfile::SquarePulse,
+                                PdeInitialProfile::PluckedTriangle,
+                                PdeInitialProfile::TwoModeHarmonic,
+                                PdeInitialProfile::LocalizedGaussian,
+                            ] {
+                                ui.selectable_value(&mut state.pde_profile, p, p.label());
+                            }
+                        });
+                } else {
+                    ui.label("u(x, 0) =");
+                    ui.add(
+                        TextEdit::singleline(&mut state.pde_custom_expr)
+                            .desired_width(250.0)
+                            .font(TextStyle::Monospace),
+                    );
+                    ui.label(
+                        RichText::new("(Fourier quadrature over x in [0, L])")
+                            .small()
+                            .weak(),
+                    );
+                }
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -1888,15 +2180,40 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
             });
         });
 
-    let snap = evaluate_1d_pde(
-        state.pde_kind,
-        state.pde_profile,
-        state.pde_alpha,
-        state.pde_speed,
-        state.pde_time,
-        state.pde_modes,
-        240,
-    );
+    let snap_res: Result<PdeSnapshot, String> = if state.pde_use_custom {
+        evaluate_1d_pde_custom(
+            state.pde_kind,
+            &state.pde_custom_expr,
+            state.pde_alpha,
+            state.pde_speed,
+            state.pde_time,
+            state.pde_modes,
+            240,
+        )
+    } else {
+        Ok(evaluate_1d_pde(
+            state.pde_kind,
+            state.pde_profile,
+            state.pde_alpha,
+            state.pde_speed,
+            state.pde_time,
+            state.pde_modes,
+            240,
+        ))
+    };
+
+    let snap = match snap_res {
+        Ok(s) => s,
+        Err(msg) => {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("Custom u(x, 0) error: {}", msg))
+                    .color(theme.err_color())
+                    .monospace(),
+            );
+            return;
+        }
+    };
 
     Plot::new("pde_1d_evolution_plot")
         .height(370.0)
@@ -1910,6 +2227,15 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
                     .width(1.6)
                     .name("Initial Profile u(x, 0)"),
             );
+            if state.pde_show_truncation_t0 {
+                plot_ui.line(
+                    Line::new(snap.reconstructed_t0_curve)
+                        .color(Color32::from_rgb(76, 196, 208))
+                        .width(1.8)
+                        .style(LineStyle::dashed_dense())
+                        .name("M-Mode Truncation u_M(x, 0)"),
+                );
+            }
             plot_ui.line(
                 Line::new(snap.evolved_curve)
                     .color(Color32::from_rgb(230, 122, 108))
@@ -1924,6 +2250,15 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
         .take(5)
         .map(|(n, amp)| format!("|c_{}|={:.3}", n, amp))
         .collect();
+    let coeff_str: Vec<String> = snap
+        .fourier_coeffs
+        .iter()
+        .take(5)
+        .map(|(n, an, bn)| match state.pde_kind {
+            PdeKind::AdvectionDiffusion => format!("n={}: (a={:.3}, b={:.3})", n, an, bn),
+            _ => format!("b_{}={:.4}", n, bn),
+        })
+        .collect();
 
     ui.add_space(6.0);
     Frame::none()
@@ -1934,14 +2269,31 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
         .show(ui, |ui| {
             ui.label(
                 RichText::new(format!(
-                    "Domain [0, {:.2}]  |  t = {:.3}  |  L^2 Energy Retention ||u(.,t)||^2 / ||u(.,0)||^2 = {:.4}",
-                    snap.domain_len, state.pde_time, snap.l2_energy_ratio
+                    "Domain [0, {:.2}]  |  t = {:.3}  |  L^2 Energy Retention ||u(.,t)||^2 / ||u(.,0)||^2 = {:.4}  |  t=0 L^2 Truncation Error = {:.4}",
+                    snap.domain_len,
+                    state.pde_time,
+                    snap.l2_energy_ratio,
+                    snap.l2_truncation_error
+                ))
+                .monospace(),
+            );
+            let mean_prefix = if matches!(state.pde_kind, PdeKind::AdvectionDiffusion) {
+                format!("a_0 = {:.4}  |  ", snap.a0)
+            } else {
+                String::new()
+            };
+            ui.label(
+                RichText::new(format!(
+                    "Fourier Quadrature (M = {}):  {}{}",
+                    state.pde_modes,
+                    mean_prefix,
+                    coeff_str.join("   ")
                 ))
                 .monospace(),
             );
             ui.label(
                 RichText::new(format!(
-                    "Leading Harmonics (M = {}):  {}",
+                    "Leading Evolved Harmonics (M = {}):  {}",
                     state.pde_modes,
                     top_modes.join("   ")
                 ))

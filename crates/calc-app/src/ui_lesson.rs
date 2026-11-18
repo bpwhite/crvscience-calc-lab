@@ -123,7 +123,11 @@ pub fn render_lesson(
                                 .unwrap_or(0.0);
                             ui.horizontal(|ui| {
                                 if ui
-                                    .small_button(format!("{} {}", p_mod.code, p_mod.title))
+                                    .small_button(format!(
+                                        "{} {}",
+                                        p_mod.code,
+                                        math_render::ui_safe_text(p_mod.title)
+                                    ))
                                     .clicked()
                                 {
                                     cmd = Some(NavCommand::OpenModule {
@@ -154,7 +158,7 @@ pub fn render_lesson(
                         .color(accent),
                 );
                 ui.add_space(4.0);
-                ui.label(spec.calculus_bridge);
+                ui.label(math_render::ui_safe_text(spec.calculus_bridge));
             });
     });
 
@@ -250,7 +254,7 @@ pub fn render_lesson(
                     RichText::new(format!(
                         "Worked Example ({}) — {}",
                         domain.short_tag(),
-                        sample.title
+                        math_render::ui_safe_text(&sample.title)
                     ))
                     .strong()
                     .color(accent),
@@ -276,9 +280,13 @@ pub fn render_lesson(
                     .inner_margin(Margin::same(8.0))
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new(format!("Step {} · {}", st.step_number, st.rule_name))
-                                .strong()
-                                .color(accent),
+                            RichText::new(format!(
+                                "Step {} · {}",
+                                st.step_number,
+                                math_render::ui_safe_text(&st.rule_name)
+                            ))
+                            .strong()
+                            .color(accent),
                         );
                         ui.label(math_render::ui_safe_text(&st.explanation));
                         ui.add_space(2.0);

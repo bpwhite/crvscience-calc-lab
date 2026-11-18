@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod math_render;
 mod theme;
@@ -189,29 +191,6 @@ fn block_on_future<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
-fn png_crc32(bytes: &[u8]) -> u32 {
-    let mut c = 0xFFFF_FFFF_u32;
-    for &b in bytes {
-        c ^= b as u32;
-        for _ in 0..8 {
-            c = if (c & 1) != 0 {
-                0xEDB8_8320_u32 ^ (c >> 1)
-            } else {
-                c >> 1
-            };
-        }
-    }
-    !c
-}
-
-fn push_png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    let start = out.len();
-    out.extend_from_slice(tag);
-    out.extend_from_slice(data);
-    out.extend_from_slice(&png_crc32(&out[start..]).to_be_bytes());
-}
-
 fn write_rgba_png(
     path: &std::path::Path,
     width: u32,
@@ -222,43 +201,112 @@ fn write_rgba_png(
     if rgba.len() != row_bytes * (height as usize) {
         return Err("RGBA buffer length mismatch".to_string());
     }
-    let mut raw = Vec::with_capacity((row_bytes + 1) * (height as usize));
-    for row in rgba.chunks_exact(row_bytes) {
-        raw.push(0);
-        raw.extend_from_slice(row);
-    }
-    let mut zlib = Vec::with_capacity(raw.len() + 256);
-    zlib.extend_from_slice(&[0x78, 0x01]);
-    let mut chunks = raw.chunks(65_535).peekable();
-    while let Some(chunk) = chunks.next() {
-        zlib.push(if chunks.peek().is_none() { 0x01 } else { 0x00 });
-        let len = chunk.len() as u16;
-        zlib.extend_from_slice(&len.to_le_bytes());
-        zlib.extend_from_slice(&(!len).to_le_bytes());
-        zlib.extend_from_slice(chunk);
-    }
-    let (mut s1, mut s2) = (1_u32, 0_u32);
-    for &b in &raw {
-        s1 = (s1 + b as u32) % 65_521;
-        s2 = (s2 + s1) % 65_521;
-    }
-    zlib.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
-    let mut png = Vec::with_capacity(zlib.len() + 64);
-    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    push_png_chunk(&mut png, b"IHDR", &ihdr);
-    push_png_chunk(&mut png, b"IDAT", &zlib);
-    push_png_chunk(&mut png, b"IEND", &[]);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory: {e}"))?;
         }
     }
-    std::fs::write(path, &png).map_err(|e| format!("Failed to write PNG: {e}"))
+    let mut encoded = Vec::with_capacity((width as usize) * (height as usize));
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| format!("Failed to encode PNG header: {e}"))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|e| format!("Failed to write PNG image data: {e}"))?;
+    }
+    std::fs::write(path, &encoded).map_err(|e| format!("Failed to write PNG: {e}"))
+}
+
+fn calclab_window_icon() -> eframe::egui::IconData {
+    const ICO_BYTES: &[u8] = include_bytes!("../assets/calclab.ico");
+    // Parse ICO directory and decode the largest embedded PNG entry (256x256).
+    if ICO_BYTES.len() >= 6 {
+        let count = u16::from_le_bytes([ICO_BYTES[4], ICO_BYTES[5]]) as usize;
+        let mut best_slice: Option<&[u8]> = None;
+        let mut best_area = 0usize;
+        for i in 0..count {
+            let off = 6 + i * 16;
+            if off + 16 > ICO_BYTES.len() {
+                break;
+            }
+            let w = if ICO_BYTES[off] == 0 { 256 } else { ICO_BYTES[off] as usize };
+            let h = if ICO_BYTES[off + 1] == 0 { 256 } else { ICO_BYTES[off + 1] as usize };
+            let size = u32::from_le_bytes([
+                ICO_BYTES[off + 8],
+                ICO_BYTES[off + 9],
+                ICO_BYTES[off + 10],
+                ICO_BYTES[off + 11],
+            ]) as usize;
+            let img_off = u32::from_le_bytes([
+                ICO_BYTES[off + 12],
+                ICO_BYTES[off + 13],
+                ICO_BYTES[off + 14],
+                ICO_BYTES[off + 15],
+            ]) as usize;
+            if img_off + size <= ICO_BYTES.len() && ICO_BYTES[img_off..].starts_with(b"\x89PNG\r\n\x1a\n") {
+                let area = w * h;
+                if area >= best_area {
+                    best_area = area;
+                    best_slice = Some(&ICO_BYTES[img_off..img_off + size]);
+                }
+            }
+        }
+        if let Some(png_slice) = best_slice {
+            let decoder = png::Decoder::new(std::io::Cursor::new(png_slice));
+            if let Ok(mut reader) = decoder.read_info() {
+                let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(256 * 256 * 4)];
+                if let Ok(info) = reader.next_frame(&mut buf) {
+                    buf.truncate(info.buffer_size());
+                    if info.color_type == png::ColorType::Rgba && info.width > 0 && info.height > 0 {
+                        return eframe::egui::IconData {
+                            rgba: buf,
+                            width: info.width,
+                            height: info.height,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    // Fallback solid emblem if decoding ever fails
+    let mut rgba = vec![0u8; 32 * 32 * 4];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 20;
+        px[1] = 30;
+        px[2] = 51;
+        px[3] = 255;
+    }
+    eframe::egui::IconData {
+        rgba,
+        width: 32,
+        height: 32,
+    }
+}
+
+fn cli_usage_text() -> String {
+    format!(
+        "CalcLab v{} — Mathematical Mastery & Scientific Calculus Workbench\n\
+         Copyright CRV Science Network (https://crvscience.com) | License: GPL-3.0-or-later\n\n\
+         USAGE:\n\
+           calc-app [OPTIONS]\n\n\
+         OPTIONS:\n\
+           -h, --help                         Print this help message and exit\n\
+               --self-test                    Run headless curriculum, symbolic, ODE/PDE, and SQLite verification\n\
+               --screenshot <PNG>             Render an offscreen 1600x1000 screenshot to <PNG> and exit\n\
+               --screenshot-view <1|2|3>, --view <1|2|3>\n\
+                                              Select screenshot view for --screenshot (1 = Practice, 2 = ODE Phase Lab, 3 = Notation Studio)",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn print_cli_help() {
+    println!("{}", cli_usage_text());
 }
 
 fn run_headless_screenshot(out_path: &std::path::Path, view: u8) -> Result<(), String> {
@@ -457,57 +505,169 @@ fn run_headless_screenshot(out_path: &std::path::Path, view: u8) -> Result<(), S
     write_rgba_png(out_path, WIDTH, HEIGHT, &rgba)
 }
 
-fn main() -> eframe::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--self-test") {
-        if let Err(err) = run_headless_self_test() {
-            eprintln!("[FAIL] {}", err);
-            std::process::exit(1);
-        }
-        return Ok(());
+#[derive(Debug, PartialEq, Eq)]
+enum CliAction {
+    Help,
+    SelfTest,
+    Screenshot { path: String, view: u8 },
+    Gui,
+}
+
+fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
+    if args.len() <= 1 {
+        return Ok(CliAction::Gui);
     }
-    if let Some(pos) = args.iter().position(|a| a == "--screenshot") {
-        let Some(out) = args.get(pos + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
-            eprintln!("[CalcLab Screenshot Error] Missing output PNG path after `--screenshot`.");
-            std::process::exit(2);
-        };
-        let view: u8 = if let Some(vpos) = args
-            .iter()
-            .position(|a| a == "--screenshot-view" || a == "--view")
-        {
-            let Some(raw) = args.get(vpos + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
-                eprintln!("[CalcLab Screenshot Error] Missing view index after `--screenshot-view`.");
-                std::process::exit(2);
-            };
-            match raw.parse::<u8>() {
-                Ok(v) if (1..=3).contains(&v) => v,
-                _ => {
-                    eprintln!(
-                        "[CalcLab Screenshot Error] Unsupported screenshot view '{raw}' (expected 1, 2, or 3)."
-                    );
-                    std::process::exit(2);
+
+    let mut help = false;
+    let mut self_test = false;
+    let mut screenshot_path: Option<String> = None;
+    let mut view: Option<u8> = None;
+
+    let mut idx = 1usize;
+    while idx < args.len() {
+        let arg = args[idx].as_str();
+        match arg {
+            "--help" | "-h" => {
+                if help {
+                    return Err(format!("Duplicate option '{arg}'."));
                 }
+                help = true;
+                idx += 1;
             }
-        } else {
-            1
-        };
-        let out_path = std::path::PathBuf::from(out);
-        if let Err(err) = run_headless_screenshot(&out_path, view) {
-            eprintln!("[CalcLab Screenshot Error] {}", err);
-            std::process::exit(1);
+            "--self-test" => {
+                if self_test {
+                    return Err("Duplicate option '--self-test'.".to_string());
+                }
+                self_test = true;
+                idx += 1;
+            }
+            "--screenshot" => {
+                if screenshot_path.is_some() {
+                    return Err("Duplicate option '--screenshot'.".to_string());
+                }
+                let Some(raw) = args.get(idx + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                    return Err("Missing output PNG path after '--screenshot'.".to_string());
+                };
+                if raw.starts_with('-') {
+                    return Err(format!(
+                        "Invalid output PNG path '{raw}' after '--screenshot' (expected a filename, not an option)."
+                    ));
+                }
+                screenshot_path = Some(raw.to_string());
+                idx += 2;
+            }
+            "--screenshot-view" | "--view" => {
+                if view.is_some() {
+                    return Err(format!("Duplicate screenshot view option '{arg}'."));
+                }
+                let Some(raw) = args.get(idx + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                    return Err(format!(
+                        "Missing view index after '{arg}' (expected 1, 2, or 3)."
+                    ));
+                };
+                if raw.starts_with('-') {
+                    return Err(format!(
+                        "Invalid view index '{raw}' after '{arg}' (expected 1, 2, or 3)."
+                    ));
+                }
+                let parsed = raw.parse::<u8>().ok().filter(|v| (1..=3).contains(v));
+                let Some(v) = parsed else {
+                    return Err(format!(
+                        "Unsupported screenshot view '{raw}' after '{arg}' (expected 1, 2, or 3)."
+                    ));
+                };
+                view = Some(v);
+                idx += 2;
+            }
+            _ if arg.starts_with('-') => {
+                return Err(format!("Unknown option '{arg}'."));
+            }
+            _ => {
+                return Err(format!("Unexpected positional argument '{arg}'."));
+            }
         }
-        println!(
-            "Saved {} (1600x1000 RGBA offscreen screenshot, view {view})",
-            out_path.display()
-        );
-        return Ok(());
+    }
+
+    if help {
+        if self_test || screenshot_path.is_some() || view.is_some() {
+            return Err("Option '--help' cannot be combined with other options.".to_string());
+        }
+        return Ok(CliAction::Help);
+    }
+
+    if self_test {
+        if screenshot_path.is_some() || view.is_some() {
+            return Err(
+                "Option '--self-test' cannot be combined with screenshot options.".to_string(),
+            );
+        }
+        return Ok(CliAction::SelfTest);
+    }
+
+    match (screenshot_path, view) {
+        (Some(path), v) => Ok(CliAction::Screenshot {
+            path,
+            view: v.unwrap_or(1),
+        }),
+        (None, Some(_)) => {
+            Err("Option '--screenshot-view' / '--view' requires '--screenshot <PNG>'.".to_string())
+        }
+        (None, None) => Ok(CliAction::Gui),
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    #[cfg(windows)]
+    if std::env::args_os().len() > 1 {
+        unsafe {
+            windows_sys::Win32::System::Console::AttachConsole(
+                windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+            );
+        }
+    }
+
+    let args: Vec<String> = std::env::args().collect();
+    let action = match parse_cli_args(&args) {
+        Ok(action) => action,
+        Err(msg) => {
+            eprintln!("[CalcLab CLI Error] {}\n\n{}", msg, cli_usage_text());
+            std::process::exit(2);
+        }
+    };
+
+    match action {
+        CliAction::Help => {
+            print_cli_help();
+            return Ok(());
+        }
+        CliAction::SelfTest => {
+            if let Err(err) = run_headless_self_test() {
+                eprintln!("[FAIL] {}", err);
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        CliAction::Screenshot { path, view } => {
+            let out_path = std::path::PathBuf::from(&path);
+            if let Err(err) = run_headless_screenshot(&out_path, view) {
+                eprintln!("[CalcLab Screenshot Error] {}", err);
+                std::process::exit(1);
+            }
+            println!(
+                "Saved {} (1600x1000 RGBA offscreen screenshot, view {view})",
+                out_path.display()
+            );
+            return Ok(());
+        }
+        CliAction::Gui => {}
     }
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("CalcLab v0.5 — Main Menu | Notation -> Algebra -> Trig -> Calc -> LinAlg -> AdvCalc -> ODE/PDE -> Prob & Stats")
             .with_inner_size([1460.0, 910.0])
-            .with_min_inner_size([1060.0, 680.0]),
+            .with_min_inner_size([1060.0, 680.0])
+            .with_icon(std::sync::Arc::new(calclab_window_icon())),
         ..Default::default()
     };
 
@@ -516,4 +676,148 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Ok(Box::new(CalcLabApp::new(cc)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_rgba_png_roundtrip_and_compression() {
+        let w = 160u32;
+        let h = 100u32;
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.push(((x * 255) / w) as u8);
+                rgba.push(((y * 255) / h) as u8);
+                rgba.push(64);
+                rgba.push(255);
+            }
+        }
+        let tmp = std::env::temp_dir().join("calclab_png_roundtrip_test.png");
+        write_rgba_png(&tmp, w, h, &rgba).expect("write compressed PNG");
+        let bytes = std::fs::read(&tmp).expect("read PNG back");
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(
+            bytes.len() < rgba.len() / 2,
+            "Expected DEFLATE compression well under raw size, got {} vs {}",
+            bytes.len(),
+            rgba.len()
+        );
+        let decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+        let mut reader = decoder.read_info().expect("decode PNG header");
+        let mut out = vec![0u8; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut out).expect("decode PNG frame");
+        assert_eq!(info.width, w);
+        assert_eq!(info.height, h);
+        assert_eq!(&out[..info.buffer_size()], rgba.as_slice());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn calclab_window_icon_has_valid_rgba_dimensions() {
+        let icon = calclab_window_icon();
+        assert!(icon.width >= 32 && icon.height >= 32);
+        assert_eq!(
+            icon.rgba.len(),
+            (icon.width as usize) * (icon.height as usize) * 4
+        );
+        assert!(icon.rgba.chunks_exact(4).any(|px| px[3] > 0));
+    }
+
+    #[test]
+    fn parse_cli_args_handles_valid_modes_and_views() {
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_cli_args(&s(&[])), Ok(CliAction::Gui));
+        assert_eq!(parse_cli_args(&s(&["calc-app"])), Ok(CliAction::Gui));
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "--help"])),
+            Ok(CliAction::Help)
+        );
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "-h"])),
+            Ok(CliAction::Help)
+        );
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "--self-test"])),
+            Ok(CliAction::SelfTest)
+        );
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "--screenshot", "out.png"])),
+            Ok(CliAction::Screenshot {
+                path: "out.png".to_string(),
+                view: 1,
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&s(&[
+                "calc-app",
+                "--screenshot",
+                "out.png",
+                "--screenshot-view",
+                "2"
+            ])),
+            Ok(CliAction::Screenshot {
+                path: "out.png".to_string(),
+                view: 2,
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "--view", "3", "--screenshot", "out.png"])),
+            Ok(CliAction::Screenshot {
+                path: "out.png".to_string(),
+                view: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_cli_args_rejects_invalid_flags_values_and_combinations() {
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        let invalid_cases: Vec<&[&str]> = vec![
+            &["calc-app", "--bogus-flag"],
+            &["calc-app", "--screenshot-view", "2"],
+            &["calc-app", "--view", "2"],
+            &["calc-app", "bogus_positional"],
+            &["calc-app", "--screenshot"],
+            &["calc-app", "--screenshot", ""],
+            &["calc-app", "--screenshot", "   "],
+            &["calc-app", "--screenshot", "--self-test"],
+            &["calc-app", "--screenshot", "--help"],
+            &["calc-app", "--screenshot", "-h"],
+            &["calc-app", "--screenshot", "-badname.png"],
+            &["calc-app", "--help", "--bogus-flag"],
+            &["calc-app", "-h", "--bogus-flag"],
+            &["calc-app", "--help", "bogus_positional"],
+            &["calc-app", "--help", "--self-test"],
+            &["calc-app", "--self-test", "--bogus-flag"],
+            &["calc-app", "--self-test", "--screenshot", "out.png"],
+            &["calc-app", "--self-test", "--view", "2"],
+            &["calc-app", "--screenshot", "out.png", "--view", "abc"],
+            &["calc-app", "--screenshot", "out.png", "--view", "9"],
+            &["calc-app", "--screenshot", "out.png", "--view", "0"],
+            &["calc-app", "--screenshot", "out.png", "--view", "4"],
+            &["calc-app", "--screenshot", "out.png", "--screenshot-view"],
+            &["calc-app", "--screenshot", "out.png", "--view", "--self-test"],
+            &["calc-app", "--screenshot", "out.png", "-z"],
+            &["calc-app", "--screenshot", "out.png", "extra_positional"],
+            &["calc-app", "--screenshot", "a.png", "--screenshot", "b.png"],
+            &["calc-app", "--screenshot", "a.png", "--view", "1", "--view", "2"],
+        ];
+        for case in invalid_cases {
+            assert!(
+                parse_cli_args(&s(case)).is_err(),
+                "Expected error for CLI args {:?}",
+                case
+            );
+        }
+    }
+
+    #[test]
+    fn cli_usage_text_documents_view_and_screenshot_view() {
+        let usage = cli_usage_text();
+        assert!(usage.contains("--screenshot-view <1|2|3>"));
+        assert!(usage.contains("--view <1|2|3>"));
+    }
 }

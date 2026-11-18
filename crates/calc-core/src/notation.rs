@@ -146,7 +146,7 @@ pub fn build_notation_lexicon() -> Vec<NotationEntry> {
             symbol_display: "∀ ε > 0,  ∃ δ > 0  s.t.  |x - a| < δ ⇒ |f(x) - L| < ε",
             name: "Universal (∀), Existential (∃) & Implication (⇒) Quantifiers",
             plain_text_form: "for all eps > 0, there exists delta > 0 such that |x - a| < delta => |f(x) - L| < eps",
-            spoken_phrasing: "'For every epsilon greater than zero, there exists a delta greater than zero such that...'",
+            spoken_phrasing: "'For every epsilon greater than zero, there exists a delta greater than zero such that the distance from x to a being less than delta implies the distance from f of x to L is less than epsilon'",
             anatomy_points: &[
                 "∀ ('for all / for every'): universal guarantee across every admissible challenge tolerance.",
                 "∃ ('there exists'): asserts you can construct at least one witness value (which may depend on earlier variables!).",
@@ -325,7 +325,7 @@ pub fn build_notation_lexicon() -> Vec<NotationEntry> {
             symbol_display: "∮_{∂Ω} F · dr   =   ∬_{Ω} (∇ × F) · n dA",
             name: "Closed Contour Integral (∮) & Topological Boundary Operator (∂Ω)",
             plain_text_form: "oint_{d_Omega} F . dr = double_integral_{Omega} (curl F) . n dA",
-            spoken_phrasing: "'the closed circulation integral around the boundary of Omega equals the double integral over Omega of...'",
+            spoken_phrasing: "'the closed circulation integral around the boundary of Omega of F dot d-r equals the double integral over Omega of the curl of F dot n d-A'",
             anatomy_points: &[
                 "The circle on ∮ emphasizes the path/surface is CLOSED (starts and ends together with no boundary of its own).",
                 "Applied to a geometric region Ω, curly ∂Ω means 'the oriented boundary of Ω' (e.g. circle bounding a disk, sphere bounding a ball).",
@@ -513,5 +513,27 @@ pub fn generate_notation_flash_question(seed: u64) -> NotationFlashQuestion {
         ],
         correct_index: pick.4,
         explanation: pick.5.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spoken_phrasings_have_no_truncated_ellipses() {
+        for entry in build_notation_lexicon() {
+            assert!(
+                !entry.spoken_phrasing.contains("...") && !entry.spoken_phrasing.contains('\u{2026}'),
+                "Notation entry '{}' has truncated spoken_phrasing: {}",
+                entry.id,
+                entry.spoken_phrasing
+            );
+            assert!(
+                !entry.spoken_phrasing.trim().is_empty(),
+                "Notation entry '{}' has empty spoken_phrasing",
+                entry.id
+            );
+        }
     }
 }
