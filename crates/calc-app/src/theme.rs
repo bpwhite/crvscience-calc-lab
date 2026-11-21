@@ -61,7 +61,7 @@ impl AcademicTheme {
                 visuals.faint_bg_color = Color32::from_rgb(30, 35, 44);
                 visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(28, 33, 42);
                 visuals.widgets.noninteractive.bg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(52, 60, 74));
+                    Stroke::new(1.0_f32, Color32::from_rgb(52, 60, 74));
                 visuals.widgets.inactive.rounding = Rounding::same(5.0);
                 visuals.widgets.hovered.rounding = Rounding::same(5.0);
                 visuals.widgets.active.rounding = Rounding::same(5.0);
@@ -73,7 +73,7 @@ impl AcademicTheme {
                 visuals.faint_bg_color = Color32::from_rgb(237, 235, 228);
                 visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(242, 240, 234);
                 visuals.widgets.noninteractive.bg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(206, 203, 194));
+                    Stroke::new(1.0_f32, Color32::from_rgb(206, 203, 194));
                 visuals.widgets.inactive.rounding = Rounding::same(5.0);
                 visuals.widgets.hovered.rounding = Rounding::same(5.0);
                 visuals.widgets.active.rounding = Rounding::same(5.0);
@@ -139,8 +139,8 @@ impl AcademicTheme {
 
     pub fn card_stroke(&self) -> Stroke {
         match self {
-            AcademicTheme::SlateDark => Stroke::new(1.0, Color32::from_rgb(55, 64, 80)),
-            AcademicTheme::PaperLight => Stroke::new(1.0, Color32::from_rgb(212, 209, 200)),
+            AcademicTheme::SlateDark => Stroke::new(1.0_f32, Color32::from_rgb(55, 64, 80)),
+            AcademicTheme::PaperLight => Stroke::new(1.0_f32, Color32::from_rgb(212, 209, 200)),
         }
     }
 }

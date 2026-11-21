@@ -28,7 +28,7 @@ cargo run --release -p calc-app
 ## Citation & CRV Science Apps Hub
 
 - **CRV Science Apps Hub**: <https://crvscience.com/apps>
-- **Companion Preprint (`APP-PREPRINT-03`)**: [Calc-Lab: Interactive Multi-Domain Scientific Calculus, Linear Algebra, and Differential Equation Verification Workbench](https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode)
+- **Companion Preprint (`APP-PREPRINT-03`)**: [Calc-Lab: Interactive Calculus, Linear Algebra, and Differential Equation Solver Workbench](https://crvscience.com/apps/preprints/calc-lab-scientific-calculus-ode)
 - **Zenodo Concept DOI**: [10.5281/zenodo.24222372](https://doi.org/10.5281/zenodo.24222372)
 - **Validation Suite & Telemetry**: [`validation/README.md`](validation/README.md) (`cargo test --workspace`)
 - **Machine-Readable Metadata**: [`CITATION.cff`](CITATION.cff)

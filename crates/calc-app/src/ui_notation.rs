@@ -201,7 +201,7 @@ pub fn render_notation_studio(
             // Rapid Symbol Recognition Mini-Drill
             Frame::none()
                 .fill(theme.card_fill())
-                .stroke(egui::Stroke::new(1.3, accent))
+                .stroke(egui::Stroke::new(1.3_f32, accent))
                 .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::same(12.0))
                 .show(ui, |ui| {
@@ -312,7 +312,7 @@ pub fn render_notation_studio(
                 let st_accent = theme.stage_accent(entry.stage);
                 Frame::none()
                     .fill(theme.card_fill())
-                    .stroke(egui::Stroke::new(1.5, st_accent))
+                    .stroke(egui::Stroke::new(1.5_f32, st_accent))
                     .rounding(Rounding::same(6.0))
                     .inner_margin(Margin::same(14.0))
                     .show(ui, |ui| {
@@ -352,7 +352,7 @@ pub fn render_notation_studio(
                                     20.0,
                                     st_accent,
                                     eq_bg,
-                                    Stroke::new(1.2, st_accent.linear_multiply(0.7)),
+                                    Stroke::new(1.2_f32, st_accent.linear_multiply(0.7)),
                                 );
                                 ui.add_space(6.0);
                                 ui.label(

@@ -624,7 +624,7 @@ pub fn render_practice(
     if state.run_finished {
         Frame::none()
             .fill(theme.card_fill())
-            .stroke(egui::Stroke::new(2.0, theme.ok_color()))
+            .stroke(egui::Stroke::new(2.0_f32, theme.ok_color()))
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::same(16.0))
             .show(ui, |ui| {
@@ -709,7 +709,7 @@ pub fn render_practice(
             ui.horizontal_wrapped(|ui| {
                 Frame::none()
                     .fill(op_badge_bg)
-                    .stroke(Stroke::new(1.2, op_color))
+                    .stroke(Stroke::new(1.2_f32, op_color))
                     .rounding(Rounding::same(4.0))
                     .inner_margin(Margin::symmetric(9.0, 4.0))
                     .show(ui, |ui| {
@@ -768,7 +768,7 @@ pub fn render_practice(
                 19.0,
                 text_fg,
                 eq_bg,
-                Stroke::new(1.2, op_color.linear_multiply(0.75)),
+                Stroke::new(1.2_f32, op_color.linear_multiply(0.75)),
             );
             ui.add_space(6.0);
             ui.label(
@@ -941,7 +941,7 @@ pub fn render_practice(
         };
         Frame::none()
             .fill(theme.card_fill())
-            .stroke(egui::Stroke::new(1.5, col))
+            .stroke(egui::Stroke::new(1.5_f32, col))
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::symmetric(10.0, 5.0))
             .show(ui, |ui| {
@@ -1031,7 +1031,7 @@ pub fn render_practice(
                             for step in &state.active_problem.steps[..unlocked] {
                                 Frame::none()
                                     .fill(theme.card_fill())
-                                    .stroke(egui::Stroke::new(1.2, stage_accent))
+                                    .stroke(egui::Stroke::new(1.2_f32, stage_accent))
                                     .rounding(Rounding::same(5.0))
                                     .inner_margin(Margin::symmetric(8.0, 5.0))
                                     .show(ui, |ui| {
@@ -1080,7 +1080,7 @@ pub fn render_practice(
                                                 theme.ok_color(),
                                                 eq_bg,
                                                 egui::Stroke::new(
-                                                    1.1,
+                                                    1.1_f32,
                                                     theme.ok_color().linear_multiply(0.65),
                                                 ),
                                             );
@@ -1132,7 +1132,7 @@ pub fn render_practice(
                                                     88, 166, 236, 56,
                                                 ))
                                                 .stroke(Stroke::new(
-                                                    1.2,
+                                                    1.2_f32,
                                                     Color32::from_rgb(88, 166, 236),
                                                 ))
                                                 .name("Shaded Integral Area"),
@@ -1151,7 +1151,7 @@ pub fn render_practice(
                                     for (seg_idx, seg) in segs.into_iter().enumerate() {
                                         let mut line = Line::new(seg)
                                             .color(Color32::from_rgb(88, 166, 236))
-                                            .width(2.2);
+                                            .width(2.2_f32);
                                         if seg_idx == 0 {
                                             line = line.name(&prim_label);
                                         }
@@ -1181,7 +1181,7 @@ pub fn render_practice(
                                         for (seg_idx, seg) in segs.into_iter().enumerate() {
                                             let mut line = Line::new(seg)
                                                 .color(Color32::from_rgb(92, 198, 148))
-                                                .width(2.4);
+                                                .width(2.4_f32);
                                             if seg_idx == 0 {
                                                 line = line.name(&sec_label);
                                             }
@@ -1210,7 +1210,7 @@ pub fn render_practice(
                                                 for (seg_idx, seg) in segs.into_iter().enumerate() {
                                                     let mut line = Line::new(seg)
                                                         .color(Color32::from_rgb(92, 198, 148))
-                                                        .width(2.4);
+                                                        .width(2.4_f32);
                                                     if seg_idx == 0 {
                                                         line = line.name(&label);
                                                     }
@@ -1238,12 +1238,12 @@ pub fn render_practice(
                                         plot_ui.line(
                                             Line::new(vec![[tx0, ty0], [tx1, ty1]])
                                                 .color(Color32::from_rgb(232, 168, 72))
-                                                .width(2.0)
+                                                .width(2.0_f32)
                                                 .name(format!("Tangent (m = {:.3})", slope)),
                                         );
                                         plot_ui.points(
                                             Points::new(vec![[x0, y0]])
-                                                .radius(5.0)
+                                                .radius(5.0_f32)
                                                 .color(Color32::from_rgb(232, 168, 72))
                                                 .name(format!("({:.2}, {:.2})", x0, y0)),
                                         );
@@ -1254,7 +1254,7 @@ pub fn render_practice(
                                 if !visual.highlight_points.is_empty() {
                                     plot_ui.points(
                                         Points::new(visual.highlight_points.clone())
-                                            .radius(5.5)
+                                            .radius(5.5_f32)
                                             .color(Color32::from_rgb(232, 168, 72))
                                             .name("Key Point(s)"),
                                     );
@@ -1263,7 +1263,7 @@ pub fn render_practice(
                                     if vx.is_finite() {
                                         let mut vl = VLine::new(vx)
                                             .color(Color32::from_rgb(232, 168, 72))
-                                            .width(1.6);
+                                            .width(1.6_f32);
                                         if let Some(lbl) = &visual.vline_label {
                                             vl = vl.name(lbl);
                                         }
@@ -1274,7 +1274,7 @@ pub fn render_practice(
                                     if hy.is_finite() {
                                         let mut hl = HLine::new(hy)
                                             .color(Color32::from_rgb(206, 126, 218))
-                                            .width(1.6);
+                                            .width(1.6_f32);
                                         if let Some(lbl) = &visual.hline_label {
                                             hl = hl.name(lbl);
                                         }
@@ -1318,7 +1318,7 @@ pub fn render_practice(
                             };
                             Frame::none()
                                 .fill(sol_fill)
-                                .stroke(egui::Stroke::new(1.5, theme.ok_color()))
+                                .stroke(egui::Stroke::new(1.5_f32, theme.ok_color()))
                                 .rounding(Rounding::same(6.0))
                                 .inner_margin(Margin::same(10.0))
                                 .show(ui, |ui| {
@@ -1335,7 +1335,7 @@ pub fn render_practice(
                                             18.0,
                                             theme.ok_color(),
                                             eq_bg,
-                                            egui::Stroke::new(1.2, theme.ok_color()),
+                                            egui::Stroke::new(1.2_f32, theme.ok_color()),
                                         );
                                         ui.label(
                                             RichText::new(format!(

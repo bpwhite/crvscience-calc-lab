@@ -297,6 +297,7 @@ fn cli_usage_text() -> String {
            calc-app [OPTIONS]\n\n\
          OPTIONS:\n\
            -h, --help                         Print this help message and exit\n\
+           -V, --version                      Print version information and exit\n\
                --self-test                    Run headless curriculum, symbolic, ODE/PDE, and SQLite verification\n\
                --screenshot <PNG>             Render an offscreen 1600x1000 screenshot to <PNG> and exit\n\
                --screenshot-view <1|2|3>, --view <1|2|3>\n\
@@ -508,6 +509,7 @@ fn run_headless_screenshot(out_path: &std::path::Path, view: u8) -> Result<(), S
 #[derive(Debug, PartialEq, Eq)]
 enum CliAction {
     Help,
+    Version,
     SelfTest,
     Screenshot { path: String, view: u8 },
     Gui,
@@ -519,6 +521,7 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     let mut help = false;
+    let mut version = false;
     let mut self_test = false;
     let mut screenshot_path: Option<String> = None;
     let mut view: Option<u8> = None;
@@ -532,6 +535,13 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
                     return Err(format!("Duplicate option '{arg}'."));
                 }
                 help = true;
+                idx += 1;
+            }
+            "--version" | "-V" => {
+                if version {
+                    return Err(format!("Duplicate option '{arg}'."));
+                }
+                version = true;
                 idx += 1;
             }
             "--self-test" => {
@@ -589,10 +599,17 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     if help {
-        if self_test || screenshot_path.is_some() || view.is_some() {
+        if version || self_test || screenshot_path.is_some() || view.is_some() {
             return Err("Option '--help' cannot be combined with other options.".to_string());
         }
         return Ok(CliAction::Help);
+    }
+
+    if version {
+        if self_test || screenshot_path.is_some() || view.is_some() {
+            return Err("Option '--version' cannot be combined with other options.".to_string());
+        }
+        return Ok(CliAction::Version);
     }
 
     if self_test {
@@ -638,6 +655,10 @@ fn main() -> eframe::Result<()> {
     match action {
         CliAction::Help => {
             print_cli_help();
+            return Ok(());
+        }
+        CliAction::Version => {
+            println!("calc-app {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         CliAction::SelfTest => {
@@ -740,6 +761,14 @@ mod tests {
             Ok(CliAction::Help)
         );
         assert_eq!(
+            parse_cli_args(&s(&["calc-app", "--version"])),
+            Ok(CliAction::Version)
+        );
+        assert_eq!(
+            parse_cli_args(&s(&["calc-app", "-V"])),
+            Ok(CliAction::Version)
+        );
+        assert_eq!(
             parse_cli_args(&s(&["calc-app", "--self-test"])),
             Ok(CliAction::SelfTest)
         );
@@ -804,6 +833,9 @@ mod tests {
             &["calc-app", "--screenshot", "out.png", "extra_positional"],
             &["calc-app", "--screenshot", "a.png", "--screenshot", "b.png"],
             &["calc-app", "--screenshot", "a.png", "--view", "1", "--view", "2"],
+            &["calc-app", "--version", "--help"],
+            &["calc-app", "-V", "--self-test"],
+            &["calc-app", "--version", "-V"],
         ];
         for case in invalid_cases {
             assert!(
@@ -817,6 +849,7 @@ mod tests {
     #[test]
     fn cli_usage_text_documents_view_and_screenshot_view() {
         let usage = cli_usage_text();
+        assert!(usage.contains("-V, --version"));
         assert!(usage.contains("--screenshot-view <1|2|3>"));
         assert!(usage.contains("--view <1|2|3>"));
     }

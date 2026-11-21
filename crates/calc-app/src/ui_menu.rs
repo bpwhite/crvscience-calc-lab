@@ -183,7 +183,7 @@ fn render_hub_overview(
                 let rec_accent = theme.stage_accent(next_spec.stage);
                 Frame::none()
                     .fill(theme.card_fill())
-                    .stroke(Stroke::new(1.5, rec_accent))
+                    .stroke(Stroke::new(1.5_f32, rec_accent))
                     .rounding(Rounding::same(6.0))
                     .inner_margin(Margin::same(12.0))
                     .show(&mut cols[1], |ui| {
@@ -333,7 +333,7 @@ fn render_hub_overview(
 
             Frame::none()
                 .fill(theme.card_fill())
-                .stroke(Stroke::new(1.2, card_accent))
+                .stroke(Stroke::new(1.2_f32, card_accent))
                 .rounding(Rounding::same(7.0))
                 .inner_margin(Margin::same(12.0))
                 .show(&mut cols[idx], |ui| {
@@ -394,7 +394,7 @@ fn render_hub_overview(
 
                 Frame::none()
                     .fill(theme.card_fill())
-                    .stroke(Stroke::new(1.3, accent))
+                    .stroke(Stroke::new(1.3_f32, accent))
                     .rounding(Rounding::same(7.0))
                     .inner_margin(Margin::same(12.0))
                     .show(&mut cols[idx], |ui| {
@@ -509,7 +509,7 @@ fn render_stage_drill_down(
 
     Frame::none()
         .fill(theme.card_fill())
-        .stroke(Stroke::new(1.6, accent))
+        .stroke(Stroke::new(1.6_f32, accent))
         .rounding(Rounding::same(8.0))
         .inner_margin(Margin::same(14.0))
         .show(ui, |ui| {

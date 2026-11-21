@@ -222,19 +222,73 @@ impl CalcLabApp {
 }
 
 impl CalcLabApp {
+    pub(crate) fn export_progress_snapshot_dialog(&mut self) {
+        match self.store.export_json(&self.catalog) {
+            Ok(json) => {
+                if let Some(out_path) = rfd::FileDialog::new()
+                    .set_file_name("calclab_progress_export.json")
+                    .add_filter("JSON Snapshot", &["json"])
+                    .save_file()
+                {
+                    match fs::write(&out_path, json) {
+                        Ok(_) => {
+                            self.analytics_view.status_is_error = false;
+                            self.analytics_view.status_banner = Some(format!(
+                                "Saved progress & run history snapshot to {}",
+                                out_path.display()
+                            ));
+                        }
+                        Err(e) => {
+                            self.analytics_view.status_is_error = true;
+                            self.analytics_view.status_banner =
+                                Some(format!("Write error: {}", e));
+                        }
+                    }
+                } else {
+                    self.analytics_view.status_is_error = false;
+                    self.analytics_view.status_banner =
+                        Some("JSON snapshot export cancelled.".to_string());
+                }
+            }
+            Err(e) => {
+                self.analytics_view.status_is_error = true;
+                self.analytics_view.status_banner = Some(format!("Export error: {}", e));
+            }
+        }
+    }
+
     pub(crate) fn render_ui(&mut self, ctx: &Context) {
         if self.theme_dirty {
             self.theme.apply(ctx);
             self.theme_dirty = false;
         }
 
-        // Escape shortcut returns cleanly to Main Menu Hub when no text box is focused
-        if !ctx.wants_keyboard_input() && ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.active_tab == AppTab::MainMenu {
-                self.menu_state.subview = MainMenuSubView::HubOverview;
-            } else {
-                self.active_tab = AppTab::MainMenu;
+        let wants_kb = ctx.wants_keyboard_input();
+        let (f1_pressed, esc_pressed, save_pressed) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::F1),
+                i.key_pressed(Key::Escape),
+                (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(Key::S),
+            )
+        });
+        if f1_pressed {
+            self.show_about = !self.show_about;
+        }
+        if esc_pressed {
+            if self.show_about {
+                self.show_about = false;
+            } else if self.analytics_view.confirm_reset {
+                self.analytics_view.confirm_reset = false;
+            } else if !wants_kb {
+                if self.active_tab == AppTab::MainMenu {
+                    self.menu_state.subview = MainMenuSubView::HubOverview;
+                } else {
+                    self.active_tab = AppTab::MainMenu;
+                }
             }
+        }
+        if save_pressed {
+            self.export_progress_snapshot_dialog();
         }
 
         // Top Navigation & Scientific Domain Selector Bar
@@ -247,6 +301,7 @@ impl CalcLabApp {
                         } else {
                             "48-Module Index"
                         })
+                        .on_hover_text("Toggle the collapsible 48-module curriculum index sidebar")
                         .clicked()
                     {
                         self.show_sidebar = !self.show_sidebar;
@@ -259,6 +314,7 @@ impl CalcLabApp {
                         self.active_tab == AppTab::MainMenu,
                         RichText::new("Main Menu").strong(),
                     )
+                    .on_hover_text("Return to the Main Menu Hub and 8-Stage Portals (Esc)")
                     .clicked()
                 {
                     self.active_tab = AppTab::MainMenu;
@@ -266,12 +322,18 @@ impl CalcLabApp {
                 }
                 ui.separator();
 
-                ui.selectable_value(&mut self.active_tab, AppTab::Roadmap, "DAG Map");
-                ui.selectable_value(&mut self.active_tab, AppTab::Notation, "Notation Studio");
-                ui.selectable_value(&mut self.active_tab, AppTab::Lesson, "Lesson");
-                ui.selectable_value(&mut self.active_tab, AppTab::Practice, "Runs & Arena");
-                ui.selectable_value(&mut self.active_tab, AppTab::Lab, "Visual Lab");
-                ui.selectable_value(&mut self.active_tab, AppTab::Analytics, "Leaderboard");
+                ui.selectable_value(&mut self.active_tab, AppTab::Roadmap, "DAG Map")
+                    .on_hover_text("Interactive 48-module prerequisite dependency graph");
+                ui.selectable_value(&mut self.active_tab, AppTab::Notation, "Notation Studio")
+                    .on_hover_text("Mathematical symbol lexicon, spoken phrasing, and flash drills");
+                ui.selectable_value(&mut self.active_tab, AppTab::Lesson, "Lesson")
+                    .on_hover_text("First-principles concept notes and worked 2D LaTeX examples");
+                ui.selectable_value(&mut self.active_tab, AppTab::Practice, "Runs & Arena")
+                    .on_hover_text("Guided walkthroughs and timed calculation sprints");
+                ui.selectable_value(&mut self.active_tab, AppTab::Lab, "Visual Lab")
+                    .on_hover_text("8 interactive mathematical visualization laboratories");
+                ui.selectable_value(&mut self.active_tab, AppTab::Analytics, "Leaderboard")
+                    .on_hover_text("SQLite run ledger, mastery analytics, and JSON export (Ctrl+S)");
 
                 ui.separator();
                 ui.push_id("global_domain_selector", |ui| {
@@ -281,11 +343,17 @@ impl CalcLabApp {
                             for dom in ScienceDomain::ALL {
                                 ui.selectable_value(&mut self.selected_domain, dom, dom.label());
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Switch applied scientific domain framing across problems and lessons");
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("About").clicked() {
+                    if ui
+                        .button("About")
+                        .on_hover_text("Show Calc-Lab version, license, and CRV Science links (F1)")
+                        .clicked()
+                    {
                         self.show_about = true;
                     }
                     ui.separator();
@@ -293,7 +361,11 @@ impl CalcLabApp {
                         AcademicTheme::SlateDark => "Paper Light",
                         AcademicTheme::PaperLight => "Slate Dark",
                     };
-                    if ui.button(theme_btn).clicked() {
+                    if ui
+                        .button(theme_btn)
+                        .on_hover_text("Switch between Slate Dark and Paper Light color themes")
+                        .clicked()
+                    {
                         self.theme = match self.theme {
                             AcademicTheme::SlateDark => AcademicTheme::PaperLight,
                             AcademicTheme::PaperLight => AcademicTheme::SlateDark,
@@ -301,7 +373,8 @@ impl CalcLabApp {
                         self.theme_dirty = true;
                     }
                     ui.separator();
-                    ui.checkbox(&mut self.free_explore, "Unlock All");
+                    ui.checkbox(&mut self.free_explore, "Unlock All")
+                        .on_hover_text("Bypass prerequisite gating to jump freely into any of the 48 modules");
                 });
             });
         });
@@ -600,44 +673,7 @@ impl CalcLabApp {
                             ) {
                                 match act {
                                     AnalyticsAction::ExportJson => {
-                                        match self.store.export_json(&self.catalog) {
-                                            Ok(json) => {
-                                                if let Some(out_path) = rfd::FileDialog::new()
-                                                    .set_file_name("calclab_progress_export.json")
-                                                    .add_filter("JSON Snapshot", &["json"])
-                                                    .save_file()
-                                                {
-                                                    match fs::write(&out_path, json) {
-                                                        Ok(_) => {
-                                                            self.analytics_view.status_is_error =
-                                                                false;
-                                                            self.analytics_view.status_banner =
-                                                                Some(format!(
-                                                                "Saved progress & run history snapshot to {}",
-                                                                out_path.display()
-                                                            ));
-                                                        }
-                                                        Err(e) => {
-                                                            self.analytics_view.status_is_error =
-                                                                true;
-                                                            self.analytics_view.status_banner =
-                                                                Some(format!("Write error: {}", e));
-                                                        }
-                                                    }
-                                                } else {
-                                                    self.analytics_view.status_is_error = false;
-                                                    self.analytics_view.status_banner = Some(
-                                                        "JSON snapshot export cancelled."
-                                                            .to_string(),
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
-                                                self.analytics_view.status_is_error = true;
-                                                self.analytics_view.status_banner =
-                                                    Some(format!("Export error: {}", e));
-                                            }
-                                        }
+                                        self.export_progress_snapshot_dialog();
                                     }
                                     AnalyticsAction::ResetProfile => {
                                         match self.store.reset_all() {
@@ -737,5 +773,55 @@ mod tests {
             .filter(|m| module_matches_query(m, "fourier"))
             .collect();
         assert!(!fourier_hits.is_empty());
+    }
+
+    fn step_key(app: &mut CalcLabApp, ctx: &Context, key: Key) {
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(raw_input, |c| {
+            app.render_ui(c);
+        });
+    }
+
+    #[test]
+    fn headless_f1_then_escape_closes_about_without_leaving_lab_tab() {
+        let ctx = Context::default();
+        let mut app = CalcLabApp::new_with_mode(true);
+        app.active_tab = AppTab::Lab;
+        app.analytics_view.confirm_reset = true;
+
+        assert!(!app.show_about);
+
+        // F1 opens About modal while staying in AppTab::Lab
+        step_key(&mut app, &ctx, Key::F1);
+        assert!(app.show_about);
+        assert_eq!(app.active_tab, AppTab::Lab);
+
+        // 1st Escape closes About modal and preserves AppTab::Lab & confirm_reset
+        step_key(&mut app, &ctx, Key::Escape);
+        assert!(!app.show_about);
+        assert_eq!(app.active_tab, AppTab::Lab);
+        assert!(app.analytics_view.confirm_reset);
+
+        // 2nd Escape dismisses confirm_reset and preserves AppTab::Lab
+        step_key(&mut app, &ctx, Key::Escape);
+        assert!(!app.analytics_view.confirm_reset);
+        assert_eq!(app.active_tab, AppTab::Lab);
+
+        // 3rd Escape returns to MainMenu
+        step_key(&mut app, &ctx, Key::Escape);
+        assert_eq!(app.active_tab, AppTab::MainMenu);
     }
 }

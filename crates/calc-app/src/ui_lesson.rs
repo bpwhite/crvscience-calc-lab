@@ -70,7 +70,7 @@ pub fn render_lesson(
         ui.add_space(8.0);
         Frame::none()
             .fill(theme.card_fill())
-            .stroke(egui::Stroke::new(1.2, accent))
+            .stroke(egui::Stroke::new(1.2_f32, accent))
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::same(10.0))
             .show(ui, |ui| {
@@ -236,7 +236,7 @@ pub fn render_lesson(
             ui.horizontal_wrapped(|ui| {
                 Frame::none()
                     .fill(badge_fill)
-                    .stroke(Stroke::new(1.1, op_col))
+                    .stroke(Stroke::new(1.1_f32, op_col))
                     .rounding(Rounding::same(4.0))
                     .inner_margin(Margin::symmetric(8.0, 3.0))
                     .show(ui, |ui| {
@@ -269,7 +269,7 @@ pub fn render_lesson(
                 17.5,
                 text_fg,
                 eq_bg,
-                Stroke::new(1.1, op_col.linear_multiply(0.75)),
+                Stroke::new(1.1_f32, op_col.linear_multiply(0.75)),
             );
             ui.add_space(6.0);
             for st in &sample.steps {
@@ -306,7 +306,7 @@ pub fn render_lesson(
                                 14.5,
                                 theme.ok_color(),
                                 theme.card_fill(),
-                                Stroke::new(1.0, theme.ok_color().linear_multiply(0.65)),
+                                Stroke::new(1.0_f32, theme.ok_color().linear_multiply(0.65)),
                             );
                         });
                     });
@@ -321,7 +321,7 @@ pub fn render_lesson(
                     16.5,
                     theme.ok_color(),
                     eq_bg,
-                    Stroke::new(1.2, theme.ok_color()),
+                    Stroke::new(1.2_f32, theme.ok_color()),
                 );
             });
         });

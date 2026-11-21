@@ -43,7 +43,7 @@ fn render_module_card(
 
     let mut border = theme.card_stroke();
     if is_selected {
-        border = egui::Stroke::new(2.0, accent);
+        border = egui::Stroke::new(2.0_f32, accent);
     }
 
     Frame::none()

@@ -486,7 +486,7 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
             {
                 let mut line = Line::new(seg)
                     .color(Color32::from_rgb(88, 166, 236))
-                    .width(2.2);
+                    .width(2.2_f32);
                 if idx == 0 {
                     line = line.name("f(x)");
                 }
@@ -500,7 +500,7 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
                 {
                     let mut line = Line::new(seg)
                         .color(Color32::from_rgb(92, 198, 148))
-                        .width(1.8);
+                        .width(1.8_f32);
                     if idx == 0 {
                         line = line.name("g(x)");
                     }
@@ -525,12 +525,12 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
                 plot_ui.line(
                     Line::new(sec_pts)
                         .color(Color32::from_rgb(232, 168, 72))
-                        .width(1.5)
+                        .width(1.5_f32)
                         .name("Secant Line"),
                 );
                 plot_ui.points(
                     Points::new(vec![[x0, y0], [x0 + h, y1]])
-                        .radius(5.0)
+                        .radius(5.0_f32)
                         .color(Color32::from_rgb(232, 168, 72))
                         .name("Secant Anchor Points"),
                 );
@@ -614,25 +614,25 @@ fn render_trig_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Acad
                 plot_ui.line(
                     Line::new(circle_pts)
                         .color(Color32::from_rgb(130, 145, 168))
-                        .width(1.6)
+                        .width(1.6_f32)
                         .name("Unit Circle x^2 + y^2 = 1"),
                 );
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], [cx, 0.0]])
                         .color(Color32::from_rgb(88, 166, 236))
-                        .width(2.8)
+                        .width(2.8_f32)
                         .name("cos(theta)"),
                 );
                 plot_ui.line(
                     Line::new(vec![[cx, 0.0], [cx, sy]])
                         .color(Color32::from_rgb(92, 198, 148))
-                        .width(2.8)
+                        .width(2.8_f32)
                         .name("sin(theta)"),
                 );
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], [cx, sy]])
                         .color(Color32::from_rgb(232, 168, 72))
-                        .width(2.2)
+                        .width(2.2_f32)
                         .name("Radius r = 1"),
                 );
                 if cx.abs() > 0.18 {
@@ -641,14 +641,14 @@ fn render_trig_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Acad
                         plot_ui.line(
                             Line::new(vec![[1.0, 0.0], [1.0, tan_v]])
                                 .color(Color32::from_rgb(206, 126, 218))
-                                .width(2.0)
+                                .width(2.0_f32)
                                 .name("tan(theta)"),
                         );
                     }
                 }
                 plot_ui.points(
                     Points::new(vec![[cx, sy]])
-                        .radius(5.5)
+                        .radius(5.5_f32)
                         .color(Color32::from_rgb(232, 168, 72)),
                 );
             });
@@ -675,13 +675,13 @@ fn render_trig_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Acad
                 plot_ui.line(
                     Line::new(sin_wave)
                         .color(Color32::from_rgb(92, 198, 148))
-                        .width(2.2)
+                        .width(2.2_f32)
                         .name("A * sin(omega*t + phi)"),
                 );
                 plot_ui.line(
                     Line::new(cos_wave)
                         .color(Color32::from_rgb(88, 166, 236))
-                        .width(1.6)
+                        .width(1.6_f32)
                         .name("A * cos(omega*t + phi)"),
                 );
                 plot_ui.vline(VLine::new(theta).color(Color32::from_rgb(232, 168, 72)));
@@ -689,7 +689,7 @@ fn render_trig_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Acad
                 let y_now = state.trig_amp * (state.trig_omega * theta + state.trig_phase).sin();
                 plot_ui.points(
                     Points::new(vec![[theta, y_now]])
-                        .radius(5.5)
+                        .radius(5.5_f32)
                         .color(Color32::from_rgb(232, 168, 72))
                         .name("Active Phase Cursor"),
                 );
@@ -705,19 +705,28 @@ fn render_trig_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Acad
         .show(ui, |ui| {
             let deg = theta.to_degrees();
             let period = 2.0 * PI / state.trig_omega;
+            let tan_str = format_tan_readout(sy, cx);
             ui.label(
                 RichText::new(format!(
-                    "theta = {:.4} rad ({:.1} deg) | cos(theta) = {:.4}, sin(theta) = {:.4}, tan(theta) = {:.4} | Wave Period T = 2*pi/omega = {:.4}",
+                    "theta = {:.4} rad ({:.1} deg) | cos(theta) = {:.4}, sin(theta) = {:.4}, tan(theta) = {} | Wave Period T = 2*pi/omega = {:.4}",
                     theta,
                     deg,
                     cx,
                     sy,
-                    sy / cx,
+                    tan_str,
                     period
                 ))
                 .monospace(),
             );
         });
+}
+
+pub(crate) fn format_tan_readout(sy: f64, cx: f64) -> String {
+    if cx.abs() < 1e-6 {
+        "undefined (asymptote)".to_string()
+    } else {
+        format!("{:.4}", sy / cx)
+    }
 }
 
 fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
@@ -793,7 +802,7 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
             if state.calc_show_riemann {
                 let fill = Color32::from_rgba_unmultiplied(88, 166, 236, 48);
                 let stroke =
-                    egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(88, 166, 236, 150));
+                    egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(88, 166, 236, 150));
                 for &(xl, xr, hl, hr) in &r_summary.subintervals {
                     let poly = Polygon::new(vec![[xl, 0.0], [xl, hl], [xr, hr], [xr, 0.0]])
                         .fill_color(fill)
@@ -808,7 +817,7 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
             {
                 let mut line = Line::new(seg)
                     .color(Color32::from_rgb(88, 166, 236))
-                    .width(2.4);
+                    .width(2.4_f32);
                 if idx == 0 {
                     line = line.name("f(x)");
                 }
@@ -836,7 +845,7 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
                 plot_ui.line(
                     Line::new(t_pts)
                         .color(Color32::from_rgb(206, 126, 218))
-                        .width(1.9)
+                        .width(1.9_f32)
                         .name("Taylor T_n(x)"),
                 );
             }
@@ -852,7 +861,7 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
                             [6.5, y0 + slope_tan * (6.5 - x0)],
                         ])
                         .color(Color32::from_rgb(92, 198, 148))
-                        .width(2.0)
+                        .width(2.0_f32)
                         .name("Exact Tangent"),
                     );
                 }
@@ -871,12 +880,12 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
                             [6.5, y0 + slope_sec * (6.5 - x0)],
                         ])
                         .color(Color32::from_rgb(232, 168, 72))
-                        .width(1.5)
+                        .width(1.5_f32)
                         .name("Secant Line"),
                     );
                     plot_ui.points(
                         Points::new(vec![[x0, y0], [x0 + h, y1]])
-                            .radius(5.0)
+                            .radius(5.0_f32)
                             .color(Color32::from_rgb(232, 168, 72)),
                     );
                 }
@@ -1017,7 +1026,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                 plot_ui.polygon(
                     Polygon::new(vec![[0.0, 0.0], c1, c12, c2])
                         .fill_color(fill_col)
-                        .stroke(egui::Stroke::new(1.2, stroke_col))
+                        .stroke(egui::Stroke::new(1.2_f32, stroke_col))
                         .name("Image of Unit Square (det A)"),
                 );
 
@@ -1034,13 +1043,13 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                 plot_ui.line(
                     Line::new(unit_circle)
                         .color(Color32::from_rgba_unmultiplied(140, 150, 168, 120))
-                        .width(1.2)
+                        .width(1.2_f32)
                         .name("Unit Circle S^1"),
                 );
                 plot_ui.line(
                     Line::new(mapped_ellipse)
                         .color(Color32::from_rgb(76, 196, 208))
-                        .width(2.2)
+                        .width(2.2_f32)
                         .name("Ellipse A(S^1)"),
                 );
 
@@ -1053,7 +1062,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                                 [3.5 * vec1[0], 3.5 * vec1[1]],
                             ])
                             .color(Color32::from_rgb(198, 126, 214))
-                            .width(1.5)
+                            .width(1.5_f32)
                             .name("Eigen-axis v1"),
                         );
                         plot_ui.line(
@@ -1062,7 +1071,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                                 [3.5 * vec2[0], 3.5 * vec2[1]],
                             ])
                             .color(Color32::from_rgb(230, 145, 220))
-                            .width(1.5)
+                            .width(1.5_f32)
                             .name("Eigen-axis v2"),
                         );
                     }
@@ -1073,7 +1082,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                                 [3.5 * primary_vec[0], 3.5 * primary_vec[1]],
                             ])
                             .color(Color32::from_rgb(198, 126, 214))
-                            .width(1.5)
+                            .width(1.5_f32)
                             .name("Eigen-axis v"),
                         );
                     }
@@ -1084,30 +1093,30 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], c1])
                         .color(Color32::from_rgb(88, 166, 236))
-                        .width(2.6)
+                        .width(2.6_f32)
                         .name("Col 1 (A*e1)"),
                 );
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], c2])
                         .color(Color32::from_rgb(92, 198, 148))
-                        .width(2.6)
+                        .width(2.6_f32)
                         .name("Col 2 (A*e2)"),
                 );
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], v_in])
                         .color(Color32::from_rgba_unmultiplied(232, 168, 72, 140))
-                        .width(1.8)
+                        .width(1.8_f32)
                         .name("Input v"),
                 );
                 plot_ui.line(
                     Line::new(vec![[0.0, 0.0], v_out])
                         .color(Color32::from_rgb(232, 168, 72))
-                        .width(2.8)
+                        .width(2.8_f32)
                         .name("Mapped A*v"),
                 );
                 plot_ui.points(
                     Points::new(vec![v_out])
-                        .radius(5.5)
+                        .radius(5.5_f32)
                         .color(Color32::from_rgb(232, 168, 72)),
                 );
             });
@@ -1126,7 +1135,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                 plot_ui.line(
                     Line::new(parabola)
                         .color(Color32::from_rgb(198, 126, 214))
-                        .width(2.0)
+                        .width(2.0_f32)
                         .name("Parabola det = tr^2 / 4 (Delta = 0)"),
                 );
                 plot_ui.hline(
@@ -1137,7 +1146,7 @@ fn render_linear_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicT
                 plot_ui.vline(VLine::new(0.0).color(Color32::from_rgb(140, 150, 168)));
                 plot_ui.points(
                     Points::new(vec![[diag.trace, diag.det]])
-                        .radius(6.5)
+                        .radius(6.5_f32)
                         .color(Color32::from_rgb(232, 168, 72))
                         .name("Matrix A = (tr(A), det(A))"),
                 );
@@ -1274,7 +1283,7 @@ fn render_epsilon_delta_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
             {
                 let mut line = Line::new(seg)
                     .color(Color32::from_rgb(88, 166, 236))
-                    .width(2.2);
+                    .width(2.2_f32);
                 if idx == 0 {
                     line = line.name("f(x)");
                 }
@@ -1305,7 +1314,7 @@ fn render_epsilon_delta_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
             if !violations.is_empty() {
                 plot_ui.points(
                     Points::new(violations)
-                        .radius(3.5)
+                        .radius(3.5_f32)
                         .color(Color32::from_rgb(224, 98, 98))
                         .name("Points Exiting Epsilon Tube"),
                 );
@@ -1320,7 +1329,7 @@ fn render_epsilon_delta_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
     };
     Frame::none()
         .fill(theme.card_fill())
-        .stroke(egui::Stroke::new(1.5, badge_col))
+        .stroke(egui::Stroke::new(1.5_f32, badge_col))
         .rounding(Rounding::same(6.0))
         .inner_margin(Margin::same(10.0))
         .show(ui, |ui| {
@@ -1474,7 +1483,7 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                             if hits.len() >= 2 {
                                 let mut line = Line::new(vec![hits[0], hits[1]])
                                     .color(Color32::from_rgba_unmultiplied(120, 155, 200, 130))
-                                    .width(1.1);
+                                    .width(1.1_f32);
                                 if first_seg {
                                     line = line.name("Level Curves f(x,y) = c");
                                     first_seg = false;
@@ -1502,7 +1511,7 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                             let tip = [x + len * ux, y + len * uy];
                             let mut shaft = Line::new(vec![[x, y], tip])
                                 .color(Color32::from_rgb(92, 198, 148))
-                                .width(1.4);
+                                .width(1.4_f32);
                             if first_q {
                                 shaft = shaft.name("Vector Field F = <P, Q>");
                                 first_q = false;
@@ -1517,7 +1526,7 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                             plot_ui.line(
                                 Line::new(vec![[wx1, wy1], tip, [wx2, wy2]])
                                     .color(Color32::from_rgb(92, 198, 148))
-                                    .width(1.3),
+                                    .width(1.3_f32),
                             );
                         }
                     }
@@ -1549,7 +1558,7 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                     plot_ui.line(
                         Line::new(path)
                             .color(Color32::from_rgb(232, 168, 72))
-                            .width(2.4)
+                            .width(2.4_f32)
                             .name("Gradient Ascent Trajectory"),
                     );
                 }
@@ -1557,7 +1566,7 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
 
             plot_ui.points(
                 Points::new(vec![[state.mv_probe_x, state.mv_probe_y]])
-                    .radius(6.0)
+                    .radius(6.0_f32)
                     .color(Color32::from_rgb(232, 168, 72))
                     .name("Probe (x0, y0)"),
             );
@@ -1828,7 +1837,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                             let tip = [x + len * ux, y + len * uy];
                             let mut shaft = Line::new(vec![[x, y], tip])
                                 .color(Color32::from_rgba_unmultiplied(125, 145, 175, 125))
-                                .width(1.1);
+                                .width(1.1_f32);
                             if first_q {
                                 shaft = shaft.name("Slope / Direction Field");
                                 first_q = false;
@@ -1844,7 +1853,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     for &(a, b) in &p_nullcline {
                         let mut line = Line::new(vec![a, b])
                             .color(Color32::from_rgb(76, 196, 208))
-                            .width(1.6)
+                            .width(1.6_f32)
                             .style(LineStyle::dashed_dense());
                         if first_pn {
                             line = line.name("dx/dt = 0 Nullcline");
@@ -1857,7 +1866,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     for &(a, b) in &q_nullcline {
                         let mut line = Line::new(vec![a, b])
                             .color(Color32::from_rgb(198, 126, 214))
-                            .width(1.6)
+                            .width(1.6_f32)
                             .style(LineStyle::dashed_dense());
                         if first_qn {
                             line = line.name("dy/dt = 0 Nullcline");
@@ -1886,7 +1895,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                         if bg_traj.len() >= 2 {
                             let mut line = Line::new(bg_traj)
                                 .color(Color32::from_rgba_unmultiplied(92, 180, 196, 120))
-                                .width(1.3);
+                                .width(1.3_f32);
                             if first_bg {
                                 line = line.name("Ensemble RK4 Orbits");
                                 first_bg = false;
@@ -1903,7 +1912,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(euler_xy)
                             .color(Color32::from_rgb(224, 98, 98))
-                            .width(1.8)
+                            .width(1.8_f32)
                             .style(LineStyle::dashed_loose())
                             .name("Explicit Euler (t >= 0)"),
                     );
@@ -1914,7 +1923,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(bwd)
                             .color(Color32::from_rgb(88, 166, 236))
-                            .width(1.8)
+                            .width(1.8_f32)
                             .name("Backward RK4 (t < 0)"),
                     );
                 }
@@ -1924,7 +1933,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(rk4_xy)
                             .color(Color32::from_rgb(232, 168, 72))
-                            .width(2.6)
+                            .width(2.6_f32)
                             .name("Forward RK4 (t >= 0)"),
                     );
                 }
@@ -1935,7 +1944,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.points(
                         Points::new(eq_pts)
                             .shape(MarkerShape::Diamond)
-                            .radius(6.5)
+                            .radius(6.5_f32)
                             .color(Color32::from_rgb(92, 198, 148))
                             .name("Equilibria (x*, y*)"),
                     );
@@ -1944,7 +1953,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                 // 7. Initial seed point (x(0), y(0))
                 plot_ui.points(
                     Points::new(vec![[state.ode_seed_x, state.ode_seed_y]])
-                        .radius(6.0)
+                        .radius(6.0_f32)
                         .color(Color32::from_rgb(232, 168, 72))
                         .name("Initial State (x(0), y(0))"),
                 );
@@ -1969,7 +1978,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(euler_xt)
                             .color(Color32::from_rgb(224, 98, 98))
-                            .width(1.8)
+                            .width(1.8_f32)
                             .style(LineStyle::dashed_loose())
                             .name("x_Euler(t)"),
                     );
@@ -1978,7 +1987,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(rk4_xt)
                             .color(Color32::from_rgb(232, 168, 72))
-                            .width(2.2)
+                            .width(2.2_f32)
                             .name("x_RK4(t)"),
                     );
                 }
@@ -1998,7 +2007,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(euler_yt)
                             .color(Color32::from_rgb(224, 98, 98))
-                            .width(1.8)
+                            .width(1.8_f32)
                             .style(LineStyle::dashed_loose())
                             .name("y_Euler(t)"),
                     );
@@ -2007,7 +2016,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     plot_ui.line(
                         Line::new(rk4_yt)
                             .color(Color32::from_rgb(88, 166, 236))
-                            .width(2.2)
+                            .width(2.2_f32)
                             .name("y_RK4(t)"),
                     );
                 }
@@ -2224,14 +2233,14 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
             plot_ui.line(
                 Line::new(snap.initial_curve)
                     .color(Color32::from_rgba_unmultiplied(145, 160, 185, 145))
-                    .width(1.6)
+                    .width(1.6_f32)
                     .name("Initial Profile u(x, 0)"),
             );
             if state.pde_show_truncation_t0 {
                 plot_ui.line(
                     Line::new(snap.reconstructed_t0_curve)
                         .color(Color32::from_rgb(76, 196, 208))
-                        .width(1.8)
+                        .width(1.8_f32)
                         .style(LineStyle::dashed_dense())
                         .name("M-Mode Truncation u_M(x, 0)"),
                 );
@@ -2239,7 +2248,7 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
             plot_ui.line(
                 Line::new(snap.evolved_curve)
                     .color(Color32::from_rgb(230, 122, 108))
-                    .width(2.6)
+                    .width(2.6_f32)
                     .name("Evolved Solution u(x, t)"),
             );
         });
@@ -2406,6 +2415,20 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                             .small()
                             .weak(),
                     );
+                    if ui
+                        .add_enabled(!state.stats_points.is_empty(), egui::Button::new("Undo Last").small())
+                        .on_hover_text("Remove the most recently added (x, y) observation")
+                        .clicked()
+                    {
+                        state.stats_points.pop();
+                    }
+                    if ui
+                        .add_enabled(!state.stats_points.is_empty(), egui::Button::new("Clear Points").small())
+                        .on_hover_text("Clear all scatter plot points to start a fresh regression dataset")
+                        .clicked()
+                    {
+                        state.stats_points.clear();
+                    }
                     if ui.small_button("Reset Sample Points").clicked() {
                         state.stats_points = vec![
                             [0.5, 1.4],
@@ -2463,7 +2486,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                             Polygon::new(poly)
                                 .fill_color(Color32::from_rgba_unmultiplied(154, 208, 96, 65))
                                 .stroke(egui::Stroke::new(
-                                    1.2,
+                                    1.2_f32,
                                     Color32::from_rgb(154, 208, 96),
                                 ))
                                 .name("P(a <= X <= b)"),
@@ -2473,7 +2496,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                     plot_ui.line(
                         Line::new(curve)
                             .color(Color32::from_rgb(88, 166, 236))
-                            .width(2.4)
+                            .width(2.4_f32)
                             .name("Normal PDF f(x)"),
                     );
                 }
@@ -2507,7 +2530,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                             Polygon::new(poly)
                                 .fill_color(Color32::from_rgba_unmultiplied(154, 208, 96, 65))
                                 .stroke(egui::Stroke::new(
-                                    1.2,
+                                    1.2_f32,
                                     Color32::from_rgb(154, 208, 96),
                                 ))
                                 .name("P(a <= T <= b)"),
@@ -2517,7 +2540,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                     plot_ui.line(
                         Line::new(curve)
                             .color(Color32::from_rgb(88, 166, 236))
-                            .width(2.4)
+                            .width(2.4_f32)
                             .name("Exponential PDF f(t)"),
                     );
                 }
@@ -2631,7 +2654,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
 
                         plot_ui.points(
                             Points::new(state.stats_points.clone())
-                                .radius(5.5)
+                                .radius(5.5_f32)
                                 .color(Color32::from_rgb(88, 166, 236))
                                 .name("Observed Data (x_i, y_i)"),
                         );
@@ -2655,7 +2678,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                                     [max_x, fit.intercept + fit.slope * max_x],
                                 ])
                                 .color(Color32::from_rgb(154, 208, 96))
-                                .width(2.5)
+                                .width(2.5_f32)
                                 .name("OLS Fit y_hat = b0 + b1*x"),
                             );
 
@@ -2665,7 +2688,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                                 plot_ui.line(
                                     Line::new(vec![*pt, [pt[0], yhat]])
                                         .color(Color32::from_rgba_unmultiplied(232, 168, 72, 145))
-                                        .width(1.2),
+                                        .width(1.2_f32),
                                 );
                             }
                         }
@@ -2721,8 +2744,34 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                             ))
                             .monospace(),
                         );
+                    } else {
+                        ui.label(
+                            RichText::new(format!(
+                                "OLS Telemetry (n = {}): Add at least 2 points with distinct x-coordinates to fit y_hat = b0 + b1*x (click inside the plot or Reset Sample Points).",
+                                state.stats_points.len()
+                            ))
+                            .monospace()
+                            .color(theme.warn_color()),
+                        );
                     }
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_tan_readout_handles_asymptotes_at_half_pi() {
+        let theta = PI / 2.0;
+        assert_eq!(
+            format_tan_readout(theta.sin(), theta.cos()),
+            "undefined (asymptote)"
+        );
+        assert_eq!(format_tan_readout(1.0, 0.0), "undefined (asymptote)");
+        assert_eq!(format_tan_readout(0.0, 1.0), "0.0000");
+        assert_eq!(format_tan_readout((PI / 4.0).sin(), (PI / 4.0).cos()), "1.0000");
+    }
 }
