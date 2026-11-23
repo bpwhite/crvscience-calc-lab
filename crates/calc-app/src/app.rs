@@ -78,6 +78,7 @@ pub struct CalcLabApp {
     pub lab: LabState,
     pub analytics_view: AnalyticsViewState,
     pub sidebar_search: String,
+    pub focus_sidebar_search: bool,
     pub show_about: bool,
     pub db_error_banner: Option<String>,
 }
@@ -156,6 +157,7 @@ impl CalcLabApp {
             lab,
             analytics_view: AnalyticsViewState::default(),
             sidebar_search: String::new(),
+            focus_sidebar_search: false,
             show_about: false,
             db_error_banner,
         }
@@ -264,13 +266,40 @@ impl CalcLabApp {
         }
 
         let wants_kb = ctx.wants_keyboard_input();
-        let (f1_pressed, esc_pressed, save_pressed) = ctx.input(|i| {
-            (
-                i.key_pressed(Key::F1),
-                i.key_pressed(Key::Escape),
-                (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(Key::S),
-            )
-        });
+        let (f1_pressed, esc_pressed, save_pressed, find_pressed, space_pressed, tab_hotkey) =
+            ctx.input(|i| {
+                let cmd_or_ctrl = i.modifiers.command || i.modifiers.ctrl;
+                let no_mods = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
+                let tab_key = if no_mods {
+                    if i.key_pressed(Key::Num1) {
+                        Some(AppTab::MainMenu)
+                    } else if i.key_pressed(Key::Num2) {
+                        Some(AppTab::Roadmap)
+                    } else if i.key_pressed(Key::Num3) {
+                        Some(AppTab::Notation)
+                    } else if i.key_pressed(Key::Num4) {
+                        Some(AppTab::Lesson)
+                    } else if i.key_pressed(Key::Num5) {
+                        Some(AppTab::Practice)
+                    } else if i.key_pressed(Key::Num6) {
+                        Some(AppTab::Lab)
+                    } else if i.key_pressed(Key::Num7) {
+                        Some(AppTab::Analytics)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                (
+                    i.key_pressed(Key::F1),
+                    i.key_pressed(Key::Escape),
+                    cmd_or_ctrl && i.key_pressed(Key::S),
+                    cmd_or_ctrl && i.key_pressed(Key::F),
+                    no_mods && i.key_pressed(Key::Space),
+                    tab_key,
+                )
+            });
         if f1_pressed {
             self.show_about = !self.show_about;
         }
@@ -290,6 +319,28 @@ impl CalcLabApp {
         if save_pressed {
             self.export_progress_snapshot_dialog();
         }
+        if find_pressed {
+            self.show_sidebar = true;
+            if self.active_tab == AppTab::MainMenu {
+                self.active_tab = AppTab::Roadmap;
+            }
+            self.focus_sidebar_search = true;
+        }
+        if !wants_kb {
+            if let Some(target_tab) = tab_hotkey {
+                if target_tab == AppTab::MainMenu {
+                    self.menu_state.subview = MainMenuSubView::HubOverview;
+                }
+                self.active_tab = target_tab;
+            }
+            if space_pressed
+                && self.active_tab == AppTab::Lab
+                && self.lab.mode == crate::ui_lab::LabMode::OdePdeLab
+                && self.lab.ode_submode == crate::ui_lab::OdePdeSubmode::PdeEvolution1D
+            {
+                self.lab.pde_animate = !self.lab.pde_animate;
+            }
+        }
 
         // Top Navigation & Scientific Domain Selector Bar
         TopBottomPanel::top("calclab_top_bar").show(ctx, |ui| {
@@ -301,7 +352,7 @@ impl CalcLabApp {
                         } else {
                             "48-Module Index"
                         })
-                        .on_hover_text("Toggle the collapsible 48-module curriculum index sidebar")
+                        .on_hover_text("Toggle the collapsible 48-module curriculum index sidebar (Ctrl+F to search)")
                         .clicked()
                     {
                         self.show_sidebar = !self.show_sidebar;
@@ -314,7 +365,7 @@ impl CalcLabApp {
                         self.active_tab == AppTab::MainMenu,
                         RichText::new("Main Menu").strong(),
                     )
-                    .on_hover_text("Return to the Main Menu Hub and 8-Stage Portals (Esc)")
+                    .on_hover_text("Return to the Main Menu Hub and 8-Stage Portals (1 or Esc)")
                     .clicked()
                 {
                     self.active_tab = AppTab::MainMenu;
@@ -323,17 +374,17 @@ impl CalcLabApp {
                 ui.separator();
 
                 ui.selectable_value(&mut self.active_tab, AppTab::Roadmap, "DAG Map")
-                    .on_hover_text("Interactive 48-module prerequisite dependency graph");
+                    .on_hover_text("Interactive 48-module prerequisite dependency graph (Hotkey: 2)");
                 ui.selectable_value(&mut self.active_tab, AppTab::Notation, "Notation Studio")
-                    .on_hover_text("Mathematical symbol lexicon, spoken phrasing, and flash drills");
+                    .on_hover_text("Mathematical symbol lexicon, spoken phrasing, and flash drills (Hotkey: 3)");
                 ui.selectable_value(&mut self.active_tab, AppTab::Lesson, "Lesson")
-                    .on_hover_text("First-principles concept notes and worked 2D LaTeX examples");
+                    .on_hover_text("First-principles concept notes and worked 2D LaTeX examples (Hotkey: 4)");
                 ui.selectable_value(&mut self.active_tab, AppTab::Practice, "Runs & Arena")
-                    .on_hover_text("Guided walkthroughs and timed calculation sprints");
+                    .on_hover_text("Guided walkthroughs and timed calculation sprints (Hotkey: 5)");
                 ui.selectable_value(&mut self.active_tab, AppTab::Lab, "Visual Lab")
-                    .on_hover_text("8 interactive mathematical visualization laboratories");
+                    .on_hover_text("8 interactive mathematical visualization laboratories (Hotkey: 6)");
                 ui.selectable_value(&mut self.active_tab, AppTab::Analytics, "Leaderboard")
-                    .on_hover_text("SQLite run ledger, mastery analytics, and JSON export (Ctrl+S)");
+                    .on_hover_text("SQLite run ledger, mastery analytics, and JSON export (Hotkey: 7, Ctrl+S)");
 
                 ui.separator();
                 ui.push_id("global_domain_selector", |ui| {
@@ -440,11 +491,15 @@ impl CalcLabApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.add(
+                        let search_resp = ui.add(
                             TextEdit::singleline(&mut self.sidebar_search)
                                 .desired_width(210.0)
-                                .hint_text("Search 48 modules (e.g. Fourier, DEQ)..."),
+                                .hint_text("Search 48 modules (Ctrl+F)..."),
                         );
+                        if self.focus_sidebar_search {
+                            search_resp.request_focus();
+                            self.focus_sidebar_search = false;
+                        }
                         if !self.sidebar_search.is_empty() && ui.small_button("x").clicked() {
                             self.sidebar_search.clear();
                         }
@@ -725,6 +780,12 @@ impl CalcLabApp {
                     ui.label("License: GNU General Public License v3.0 or later (GPL-3.0-or-later)");
                     ui.add_space(6.0);
                     ui.label("48-module mastery DAG across 8 stages, 2D LaTeX walkthroughs, ODE phase portraits, and 1D spectral PDEs.");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Shortcuts: 1-7 Tabs | Ctrl+F Search | Space PDE Play/Pause | Ctrl+S Export | F1 About | Esc Back")
+                            .small()
+                            .weak(),
+                    );
                     ui.add_space(6.0);
                     ui.hyperlink_to("CRV Science Network (https://crvscience.com)", "https://crvscience.com");
                     ui.hyperlink_to("CRV Science Apps Hub (https://crvscience.com/apps)", "https://crvscience.com/apps");
@@ -775,24 +836,47 @@ mod tests {
         assert!(!fourier_hits.is_empty());
     }
 
-    fn step_key(app: &mut CalcLabApp, ctx: &Context, key: Key) {
+    fn step_frame(app: &mut CalcLabApp, ctx: &Context) {
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(1280.0, 800.0),
             )),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw_input, |c| {
+            app.render_ui(c);
+        });
+    }
+
+    fn step_key_with_mods(
+        app: &mut CalcLabApp,
+        ctx: &Context,
+        key: Key,
+        modifiers: egui::Modifiers,
+    ) {
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            )),
+            modifiers,
             events: vec![egui::Event::Key {
                 key,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             }],
             ..Default::default()
         };
         let _ = ctx.run(raw_input, |c| {
             app.render_ui(c);
         });
+    }
+
+    fn step_key(app: &mut CalcLabApp, ctx: &Context, key: Key) {
+        step_key_with_mods(app, ctx, key, egui::Modifiers::NONE);
     }
 
     #[test]
@@ -823,5 +907,64 @@ mod tests {
         // 3rd Escape returns to MainMenu
         step_key(&mut app, &ctx, Key::Escape);
         assert_eq!(app.active_tab, AppTab::MainMenu);
+    }
+
+    #[test]
+    fn headless_tab_hotkeys_1_to_7_and_text_edit_guard() {
+        let ctx = Context::default();
+        let mut app = CalcLabApp::new_with_mode(true);
+
+        // Run one blank frame first
+        step_frame(&mut app, &ctx);
+        assert_eq!(app.active_tab, AppTab::MainMenu);
+
+        let expected = [
+            (Key::Num2, AppTab::Roadmap),
+            (Key::Num3, AppTab::Notation),
+            (Key::Num4, AppTab::Lesson),
+            (Key::Num6, AppTab::Lab),
+            (Key::Num7, AppTab::Analytics),
+            (Key::Num1, AppTab::MainMenu),
+            (Key::Num5, AppTab::Practice),
+        ];
+        for (k, tab) in expected {
+            step_key(&mut app, &ctx, k);
+            assert_eq!(app.active_tab, tab);
+        }
+
+        // Practice focuses answer_input TextEdit on first render; once focused, Num1 must NOT leave Practice
+        assert!(ctx.wants_keyboard_input());
+        step_key(&mut app, &ctx, Key::Num1);
+        assert_eq!(app.active_tab, AppTab::Practice);
+    }
+
+    #[test]
+    fn headless_space_toggles_pde_animation_and_ctrl_f_focuses_search() {
+        let ctx = Context::default();
+        let mut app = CalcLabApp::new_with_mode(true);
+        app.active_tab = AppTab::Lab;
+        app.lab.mode = crate::ui_lab::LabMode::OdePdeLab;
+        app.lab.ode_submode = crate::ui_lab::OdePdeSubmode::PdeEvolution1D;
+
+        step_frame(&mut app, &ctx);
+        assert!(!app.lab.pde_animate);
+
+        step_key(&mut app, &ctx, Key::Space);
+        assert!(app.lab.pde_animate);
+
+        step_key(&mut app, &ctx, Key::Space);
+        assert!(!app.lab.pde_animate);
+
+        // Ctrl+F opens sidebar and focuses sidebar_search TextEdit
+        assert!(!app.show_sidebar);
+        step_key_with_mods(&mut app, &ctx, Key::F, egui::Modifiers::CTRL);
+        assert!(app.show_sidebar);
+        assert!(ctx.wants_keyboard_input());
+
+        // With sidebar_search focused, Space must NOT toggle pde_animate and Num1 must NOT switch tabs
+        step_key(&mut app, &ctx, Key::Space);
+        assert!(!app.lab.pde_animate);
+        step_key(&mut app, &ctx, Key::Num1);
+        assert_eq!(app.active_tab, AppTab::Lab);
     }
 }

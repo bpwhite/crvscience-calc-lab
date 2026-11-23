@@ -17,10 +17,9 @@ use crate::app::{AppTab, NavCommand};
 use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
-    format_run_scope, pick_next_adaptive_module, plain_input_to_latex, score_attempt,
-    AnswerFormat, CurriculumCatalog, Expr, GeneratedProblem, GradeOutcome, LearningRunRecord,
-    ModuleMastery, ProblemGenerator, RunMode, ScienceDomain, Stage, StageScopeFilter,
-    WalkthroughVisual,
+    format_run_scope, pick_next_adaptive_module, score_attempt, AnswerFormat, CurriculumCatalog,
+    Expr, GeneratedProblem, GradeOutcome, LearningRunRecord, ModuleMastery, ProblemGenerator,
+    RunMode, ScienceDomain, Stage, StageScopeFilter, WalkthroughVisual,
 };
 use chrono::Utc;
 use egui::{
@@ -762,20 +761,43 @@ pub fn render_practice(
             ui.add_space(3.0);
             math_render::paint_mixed_prompt(ui, &state.active_problem.prompt, 15.0, text_fg);
             ui.add_space(4.0);
-            math_render::paint_latex_boxed(
-                ui,
-                &state.active_problem.target_equation_latex,
-                19.0,
-                text_fg,
-                eq_bg,
-                Stroke::new(1.2_f32, op_color.linear_multiply(0.75)),
-            );
+            ui.horizontal_wrapped(|ui| {
+                math_render::paint_latex_boxed(
+                    ui,
+                    &state.active_problem.target_equation_latex,
+                    19.0,
+                    text_fg,
+                    eq_bg,
+                    Stroke::new(1.2_f32, op_color.linear_multiply(0.75)),
+                );
+                math_render::copy_latex_button(
+                    ui,
+                    ("practice_target_eq", state.active_problem.seed),
+                    &state.active_problem.target_equation_latex,
+                    "Copy problem equation as LaTeX",
+                );
+            });
             ui.add_space(6.0);
             ui.label(
                 RichText::new(state.active_problem.answer.format_hint())
                     .small()
                     .weak(),
             );
+            Frame::none()
+                .fill(eq_bg)
+                .stroke(theme.card_stroke())
+                .rounding(Rounding::same(4.0))
+                .inner_margin(Margin::symmetric(8.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Syntax Helper:  + - * / ^   |   pi, e   |   sqrt(), abs(), ln(), exp(), sin(), cos(), tan(), asin(), acos(), atan()   |   2D Vector: <P, Q>",
+                        )
+                        .small()
+                        .monospace()
+                        .weak(),
+                    );
+                });
             ui.add_space(6.0);
 
             let mut submit_now = false;
@@ -818,11 +840,24 @@ pub fn render_practice(
                     advance_now = true;
                 }
 
-                // Live 2D Rendered User-Input Preview inline right beside input controls
+                // Live Parse Status Badge & 2D Rendered User-Input Preview inline right beside input controls
                 if !state.answer_input.trim().is_empty() {
-                    match plain_input_to_latex(&state.answer_input) {
+                    match state.active_problem.validate_input_syntax(&state.answer_input) {
                         Ok(latex) => {
                             ui.separator();
+                            Frame::none()
+                                .fill(Color32::from_rgba_unmultiplied(84, 196, 132, 26))
+                                .stroke(Stroke::new(1.1_f32, theme.ok_color()))
+                                .rounding(Rounding::same(4.0))
+                                .inner_margin(Margin::symmetric(6.0, 2.0))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("Syntax OK")
+                                            .small()
+                                            .strong()
+                                            .color(theme.ok_color()),
+                                    );
+                                });
                             ui.label(RichText::new("2D Preview:").small().weak());
                             math_render::paint_latex_boxed(
                                 ui,
@@ -832,13 +867,33 @@ pub fn render_practice(
                                 eq_bg,
                                 theme.card_stroke(),
                             );
+                            math_render::copy_latex_button(
+                                ui,
+                                "practice_answer_preview",
+                                &latex,
+                                "Copy your parsed answer expression as LaTeX",
+                            );
                         }
                         Err(err) => {
-                            ui.label(
-                                RichText::new(format!("Syntax check: {}", err))
-                                    .small()
-                                    .color(theme.warn_color()),
-                            );
+                            ui.separator();
+                            Frame::none()
+                                .fill(Color32::from_rgba_unmultiplied(224, 98, 98, 28))
+                                .stroke(Stroke::new(1.2_f32, theme.err_color()))
+                                .rounding(Rounding::same(4.0))
+                                .inner_margin(Margin::symmetric(7.0, 2.0))
+                                .show(ui, |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            RichText::new("PARSE ERROR:")
+                                                .small()
+                                                .strong()
+                                                .color(theme.err_color()),
+                                        );
+                                        ui.label(
+                                            RichText::new(err).small().color(theme.err_color()),
+                                        );
+                                    });
+                                });
                         }
                     }
                 }
@@ -1337,6 +1392,12 @@ pub fn render_practice(
                                             eq_bg,
                                             egui::Stroke::new(1.2_f32, theme.ok_color()),
                                         );
+                                        math_render::copy_latex_button(
+                                            ui,
+                                            ("practice_final_solution", state.active_problem.seed),
+                                            &state.active_problem.answer_latex,
+                                            "Copy final solution as LaTeX",
+                                        );
                                         ui.label(
                                             RichText::new(format!(
                                                 "Plain-Text Input: {}",
@@ -1493,5 +1554,35 @@ mod tests {
             "Expected pole discontinuity at x=1 to split into >= 2 segments, got {}",
             segs.len()
         );
+    }
+
+    #[test]
+    fn live_syntax_validator_handles_numeric_scalar_and_vector_errors() {
+        let num_prob = ProblemGenerator::generate_with_domain(
+            "calc-integrals-ftc",
+            11,
+            ScienceDomain::General,
+        );
+        assert!(num_prob.validate_input_syntax("7/2 + pi/4").is_ok());
+        assert!(num_prob.validate_input_syntax("2*x").is_err());
+        assert!(num_prob.validate_input_syntax("1/0").is_err());
+
+        let scalar_prob = ProblemGenerator::generate_with_domain(
+            "calc-derivatives-core",
+            11,
+            ScienceDomain::General,
+        );
+        assert!(scalar_prob.validate_input_syntax("3*x^2 - cos(x)").is_ok());
+        assert!(scalar_prob.validate_input_syntax("3*z^2").is_err());
+        assert!(scalar_prob.validate_input_syntax("sin(x").is_err());
+
+        let vec_prob = ProblemGenerator::generate_with_domain(
+            "adv-partial-grad",
+            11,
+            ScienceDomain::General,
+        );
+        assert!(vec_prob.validate_input_syntax("<2*x, -3*y>").is_ok());
+        assert!(vec_prob.validate_input_syntax("2*x").is_err());
+        assert!(vec_prob.validate_input_syntax("<2*x, z>").is_err());
     }
 }

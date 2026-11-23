@@ -57,8 +57,8 @@ pub use ode_pde::{
 };
 pub use prob_stats::{
     binomial_pmf, compute_bayes_binary, erf_approx, exponential_cdf, exponential_pdf,
-    fit_ols_linear, normal_cdf, normal_pdf, poisson_pmf, BayesDiagnosticSummary,
-    DistributionKind, OlsRegressionSummary,
+    fit_ols_linear, ln_factorial, ln_gamma, normal_cdf, normal_pdf, poisson_pmf,
+    BayesDiagnosticSummary, DistributionKind, OlsRegressionSummary,
 };
 pub use runs::{
     format_run_scope, score_attempt, LearningRunRecord, RunMode, ScoreDelta,
@@ -107,6 +107,13 @@ mod tests {
                 let prob = ProblemGenerator::generate_with_domain(m.id, 17 + idx as u64, dom);
                 assert!(!prob.steps.is_empty(), "Missing SolutionSteps for {}", m.id);
                 let canonical = prob.answer.canonical();
+                assert!(
+                    prob.validate_input_syntax(&canonical).is_ok(),
+                    "Live syntax check rejected canonical '{}' for module {} domain {:?}",
+                    canonical,
+                    m.id,
+                    dom
+                );
                 let res = prob.grade(&canonical);
                 assert!(
                     res.correct,

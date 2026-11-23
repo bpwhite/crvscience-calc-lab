@@ -1264,10 +1264,13 @@ pub fn adaptive_simpson(
         let e = 0.5 * (c + b);
         let fd = expr.eval_1d(var, d);
         let fe = expr.eval_1d(var, e);
+        if !fd.is_finite() || !fe.is_finite() {
+            return f64::NAN;
+        }
         let left = ((c - a) / 6.0) * (fa + 4.0 * fd + fc);
         let right = ((b - c) / 6.0) * (fc + 4.0 * fe + fb);
         if !left.is_finite() || !right.is_finite() {
-            return whole;
+            return f64::NAN;
         }
         if depth == 0 || (left + right - whole).abs() <= 15.0 * eps {
             left + right + (left + right - whole) / 15.0
@@ -1277,8 +1280,19 @@ pub fn adaptive_simpson(
         }
     }
 
+    if !a.is_finite() || !b.is_finite() || !eps.is_finite() || eps <= 0.0 {
+        return f64::NAN;
+    }
+    if (b - a).abs() == 0.0 {
+        return if expr.eval_1d(var, a).is_finite() {
+            0.0
+        } else {
+            f64::NAN
+        };
+    }
+
     let (_, fa, fb, fc, whole) = simpson_step(expr, var, a, b);
-    if !whole.is_finite() {
+    if !fa.is_finite() || !fb.is_finite() || !fc.is_finite() || !whole.is_finite() {
         return f64::NAN;
     }
     recurse(expr, var, a, b, eps, whole, fa, fb, fc, max_depth)
@@ -1443,5 +1457,29 @@ mod tests {
             .expect("parse e-1")
             .eval(&env);
         assert!((v_e_minus_1 - (std::f64::consts::E - 1.0)).abs() < 1e-12, "got {v_e_minus_1}");
+    }
+
+    #[test]
+    fn adaptive_simpson_propagates_nan_on_poles_and_domain_violations() {
+        // Pole at interior dyadic point x = 0.5 (hit at first recursion split)
+        let pole_mid = Expr::parse("1 / (x - 0.5)").unwrap();
+        assert!(adaptive_simpson(&pole_mid, "x", 0.0, 2.0, 1e-8, 12).is_nan());
+
+        // Pole at deeper dyadic point x = 0.25 on [0, 1]
+        let pole_quarter = Expr::parse("1 / (x - 0.25)").unwrap();
+        assert!(adaptive_simpson(&pole_quarter, "x", 0.0, 1.0, 1e-8, 12).is_nan());
+
+        // Pole at x = 0 on [-1, 3]
+        let inv_x = Expr::parse("1 / x").unwrap();
+        assert!(adaptive_simpson(&inv_x, "x", -1.0, 3.0, 1e-8, 12).is_nan());
+
+        // Domain violation sqrt(-1) at left endpoint
+        let sqrt_x = Expr::parse("sqrt(x)").unwrap();
+        assert!(adaptive_simpson(&sqrt_x, "x", -1.0, 2.0, 1e-8, 12).is_nan());
+
+        // Smooth integrand still integrates to machine accuracy
+        let poly = Expr::parse("x^2").unwrap();
+        let val = adaptive_simpson(&poly, "x", 0.0, 3.0, 1e-10, 12);
+        assert!((val - 9.0).abs() < 1e-10, "got {val}");
     }
 }

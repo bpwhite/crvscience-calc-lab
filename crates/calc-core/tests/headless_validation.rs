@@ -568,6 +568,23 @@ fn t4_ode_phase_equilibria_and_custom_fourier_quadrature() {
         assert!(snap.l2_truncation_error < 1e-3);
         assert!(!snap.fourier_coeffs.is_empty());
         assert_eq!(snap.reconstructed_t0_curve.len(), snap.initial_curve.len());
+        if kind == PdeKind::WaveEquation {
+            let quarter = evaluate_1d_pde_custom(
+                PdeKind::WaveEquation,
+                expr_str,
+                0.0,
+                1.0,
+                PI / 2.0,
+                8,
+                128,
+            )
+            .expect("quarter-period wave PDE succeeds");
+            assert!(
+                (quarter.l2_energy_ratio - 1.0).abs() < 1e-6,
+                "WaveEquation total energy ratio must stay conserved at t=pi/(2c), got {}",
+                quarter.l2_energy_ratio
+            );
+        }
         pde_metrics.push(json!({
             "kind": kind.label(),
             "a0": snap.a0,

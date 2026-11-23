@@ -551,12 +551,17 @@ where
 
             for (idx, &bn) in b_coeffs.iter().enumerate() {
                 let k = (idx + 1) as f64;
-                let bt = match kind {
-                    PdeKind::HeatDiffusion => bn * (-alpha * k * k * time_t).exp(),
-                    PdeKind::WaveEquation => bn * (speed * k * time_t).cos(),
-                    PdeKind::AdvectionDiffusion => bn,
+                let (bt, kinetic_norm) = match kind {
+                    PdeKind::HeatDiffusion => (bn * (-alpha * k * k * time_t).exp(), 0.0),
+                    PdeKind::WaveEquation => {
+                        let phase = speed * k * time_t;
+                        // Total mechanical energy combines potential/displacement (b_n cos(c*k*t))^2
+                        // and normalized kinetic velocity (b_n sin(c*k*t))^2 so E(t) = E(0) is conserved.
+                        (bn * phase.cos(), bn * phase.sin())
+                    }
+                    PdeKind::AdvectionDiffusion => (bn, 0.0),
                 };
-                curr_energy += bt * bt;
+                curr_energy += bt * bt + kinetic_norm * kinetic_norm;
                 evolved_coeffs.push(bt);
                 mode_energies.push((idx + 1, bt.abs()));
             }
@@ -910,5 +915,52 @@ mod tests {
 
         // In-bound finite seed still records initial state
         assert!(!solve_planar_system_rk4(&p, &q, 1.0, 0.0, 0.05, 10, 4.8).is_empty());
+    }
+
+    #[test]
+    fn wave_equation_conserves_total_mechanical_energy_at_quarter_period() {
+        for &speed in &[1.0_f64, 1.75_f64] {
+            let t_quarter = PI / (2.0 * speed);
+            for profile in [
+                PdeInitialProfile::TwoModeHarmonic,
+                PdeInitialProfile::PluckedTriangle,
+                PdeInitialProfile::SquarePulse,
+                PdeInitialProfile::LocalizedGaussian,
+            ] {
+                for &t in &[0.0, t_quarter, 0.73, 2.1] {
+                    let snap = evaluate_1d_pde(
+                        PdeKind::WaveEquation,
+                        profile,
+                        0.0,
+                        speed,
+                        t,
+                        18,
+                        128,
+                    );
+                    assert!(
+                        (snap.l2_energy_ratio - 1.0).abs() < 1e-6,
+                        "Wave energy conservation violated for {:?} at c={speed}, t={t}: ratio={}",
+                        profile,
+                        snap.l2_energy_ratio
+                    );
+                }
+            }
+
+            let custom = evaluate_1d_pde_custom(
+                PdeKind::WaveEquation,
+                "2*sin(x) - 0.5*sin(3*x)",
+                0.0,
+                speed,
+                t_quarter,
+                12,
+                128,
+            )
+            .expect("custom wave PDE succeeds");
+            assert!(
+                (custom.l2_energy_ratio - 1.0).abs() < 1e-6,
+                "Custom wave energy conservation failed at t=pi/(2c): {}",
+                custom.l2_energy_ratio
+            );
+        }
     }
 }

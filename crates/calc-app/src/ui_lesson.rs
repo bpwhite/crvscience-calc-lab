@@ -263,14 +263,22 @@ pub fn render_lesson(
             ui.add_space(4.0);
             ui.label(math_render::ui_safe_text(&sample.prompt));
             ui.add_space(4.0);
-            math_render::paint_latex_boxed(
-                ui,
-                &sample.target_equation_latex,
-                17.5,
-                text_fg,
-                eq_bg,
-                Stroke::new(1.1_f32, op_col.linear_multiply(0.75)),
-            );
+            ui.horizontal_wrapped(|ui| {
+                math_render::paint_latex_boxed(
+                    ui,
+                    &sample.target_equation_latex,
+                    17.5,
+                    text_fg,
+                    eq_bg,
+                    Stroke::new(1.1_f32, op_col.linear_multiply(0.75)),
+                );
+                math_render::copy_latex_button(
+                    ui,
+                    ("lesson_target_eq", spec.id),
+                    &sample.target_equation_latex,
+                    "Copy worked example equation as LaTeX",
+                );
+            });
             ui.add_space(6.0);
             for st in &sample.steps {
                 Frame::none()
@@ -322,6 +330,12 @@ pub fn render_lesson(
                     theme.ok_color(),
                     eq_bg,
                     Stroke::new(1.2_f32, theme.ok_color()),
+                );
+                math_render::copy_latex_button(
+                    ui,
+                    ("lesson_final_sol", spec.id),
+                    &sample.answer_latex,
+                    "Copy worked example solution as LaTeX",
                 );
             });
         });

@@ -2865,6 +2865,36 @@ pub fn paint_transformation_arrow(ui: &mut Ui, font_size: f32, color: Color32) -
         .inner
 }
 
+/// Renders a compact `"Copy LaTeX"` button that copies `latex` to the clipboard
+/// and flashes a brief `"Copied LaTeX!"` confirmation using ephemeral egui memory.
+pub fn copy_latex_button(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash,
+    latex: &str,
+    tooltip: &str,
+) {
+    let flash_id = ui.make_persistent_id(id_salt).with("copy_latex_flash");
+    let now = ui.ctx().input(|i| i.time);
+    let copied_at = ui.ctx().data(|d| d.get_temp::<f64>(flash_id));
+    let is_recent = copied_at.is_some_and(|t| now - t < 1.5);
+    let label = if is_recent {
+        "Copied LaTeX!"
+    } else {
+        "Copy LaTeX"
+    };
+    if is_recent {
+        ui.ctx().request_repaint();
+    }
+    if ui
+        .small_button(label)
+        .on_hover_text(format!("{tooltip}\nLaTeX: {latex}"))
+        .clicked()
+    {
+        ui.ctx().copy_text(latex.to_string());
+        ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PromptSegment {
     Prose(String),

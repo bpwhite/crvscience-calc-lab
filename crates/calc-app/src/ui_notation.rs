@@ -346,14 +346,22 @@ pub fn render_notation_studio(
                             .show(ui, |ui| {
                                 let sym_tex =
                                     math_render::unicode_math_to_latex(entry.symbol_display);
-                                math_render::paint_latex_boxed(
-                                    ui,
-                                    &sym_tex,
-                                    20.0,
-                                    st_accent,
-                                    eq_bg,
-                                    Stroke::new(1.2_f32, st_accent.linear_multiply(0.7)),
-                                );
+                                ui.horizontal_wrapped(|ui| {
+                                    math_render::paint_latex_boxed(
+                                        ui,
+                                        &sym_tex,
+                                        20.0,
+                                        st_accent,
+                                        eq_bg,
+                                        Stroke::new(1.2_f32, st_accent.linear_multiply(0.7)),
+                                    );
+                                    math_render::copy_latex_button(
+                                        ui,
+                                        ("notation_symbol", entry.id),
+                                        &sym_tex,
+                                        "Copy notation symbol expression as LaTeX",
+                                    );
+                                });
                                 ui.add_space(6.0);
                                 ui.label(
                                     RichText::new(format!(

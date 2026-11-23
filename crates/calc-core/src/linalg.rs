@@ -93,7 +93,8 @@ impl Mat2 {
 
     pub fn inverse(&self) -> Option<Self> {
         let d = self.det();
-        if d.abs() < 1e-11 {
+        let (s1, s2) = self.singular_values();
+        if !d.is_finite() || d == 0.0 || s1 == 0.0 || s2 <= 1e-12 * s1 {
             None
         } else {
             let inv_d = 1.0 / d;
@@ -107,28 +108,43 @@ impl Mat2 {
     }
 
     pub fn rank(&self) -> usize {
-        if self.det().abs() > 1e-9 {
-            2
-        } else if self.a11.abs() > 1e-9
-            || self.a12.abs() > 1e-9
-            || self.a21.abs() > 1e-9
-            || self.a22.abs() > 1e-9
-        {
-            1
-        } else {
+        let (s1, s2) = self.singular_values();
+        if !s1.is_finite() || s1 == 0.0 {
             0
+        } else if s2 > 1e-12 * s1 {
+            2
+        } else {
+            1
         }
     }
 
     pub fn singular_values(&self) -> (f64, f64) {
-        // Eigenvalues of A^T * A
-        let ata = self.transpose().mul(self);
-        let tr = ata.trace().max(0.0);
-        let det = ata.det().max(0.0);
-        let disc = (tr * tr - 4.0 * det).max(0.0).sqrt();
-        let s1 = (0.5 * (tr + disc)).max(0.0).sqrt();
-        let s2 = (0.5 * (tr - disc)).max(0.0).sqrt();
-        (s1, s2)
+        // Direct 2x2 SVD using (a11 +/- a22)^2 + (a21 -/+ a12)^2 via overflow-safe hypot
+        // after max-entry scaling, avoiding condition-number squaring in A^T * A.
+        let scale = self
+            .a11
+            .abs()
+            .max(self.a12.abs())
+            .max(self.a21.abs())
+            .max(self.a22.abs());
+        if !scale.is_finite() || scale == 0.0 {
+            return (0.0, 0.0);
+        }
+        let b11 = self.a11 / scale;
+        let b12 = self.a12 / scale;
+        let b21 = self.a21 / scale;
+        let b22 = self.a22 / scale;
+
+        let s_plus = (b11 + b22).hypot(b21 - b12);
+        let s_minus = (b11 - b22).hypot(b21 + b12);
+        let s1_scaled = 0.5 * (s_plus + s_minus);
+        let det_scaled = (b11 * b22 - b12 * b21).abs();
+        let s2_scaled = if s1_scaled > 0.0 {
+            (det_scaled / s1_scaled).min(s1_scaled)
+        } else {
+            0.0
+        };
+        (s1_scaled * scale, s2_scaled * scale)
     }
 
     fn eigenvector_for(&self, lambda: f64) -> [f64; 2] {
@@ -136,21 +152,23 @@ impl Mat2 {
         let r1y = self.a12;
         let r2x = self.a21;
         let r2y = self.a22 - lambda;
+        let scale = (self.a11.abs() + self.a12.abs() + self.a21.abs() + self.a22.abs()).max(1e-30);
+        let zero_tol = 1e-11 * scale;
 
         let (vx, vy) = if r1x.abs() + r1y.abs() >= r2x.abs() + r2y.abs() {
-            if r1x.abs() + r1y.abs() < 1e-11 {
+            if r1x.abs() + r1y.abs() < zero_tol {
                 (1.0, 0.0)
             } else {
                 (-r1y, r1x)
             }
-        } else if r2x.abs() + r2y.abs() < 1e-11 {
+        } else if r2x.abs() + r2y.abs() < zero_tol {
             (1.0, 0.0)
         } else {
             (-r2y, r2x)
         };
 
-        let norm = (vx * vx + vy * vy).sqrt();
-        if norm < 1e-12 {
+        let norm = vx.hypot(vy);
+        if norm == 0.0 || !norm.is_finite() {
             [1.0, 0.0]
         } else {
             [vx / norm, vy / norm]
@@ -161,9 +179,16 @@ impl Mat2 {
         let tr = self.trace();
         let det = self.det();
         let disc = tr * tr - 4.0 * det;
-        let eps = 1e-7;
+        let frob_sq = self.a11 * self.a11
+            + self.a12 * self.a12
+            + self.a21 * self.a21
+            + self.a22 * self.a22;
+        let frob = frob_sq.sqrt();
+        // Scale quadratic tolerances (det, disc) by ||A||_F^2 and linear tolerances (tr, scalar check) by ||A||_F.
+        let eps_sq = 1e-12 * frob_sq;
+        let eps_lin = 1e-7 * frob;
 
-        let spectrum = if disc > eps {
+        let spectrum = if disc > eps_sq {
             let root = disc.sqrt();
             let l1 = 0.5 * (tr + root);
             let l2 = 0.5 * (tr - root);
@@ -173,17 +198,17 @@ impl Mat2 {
                 vec1: self.eigenvector_for(l1),
                 vec2: self.eigenvector_for(l2),
             }
-        } else if disc < -eps {
+        } else if disc < -eps_sq {
             EigenSpectrum2D::ComplexConjugate {
                 real_part: 0.5 * tr,
                 imag_part: 0.5 * (-disc).sqrt(),
             }
         } else {
             let l = 0.5 * tr;
-            let is_scalar = (self.a11 - l).abs() < 1e-7
-                && self.a12.abs() < 1e-7
-                && self.a21.abs() < 1e-7
-                && (self.a22 - l).abs() < 1e-7;
+            let is_scalar = (self.a11 - l).abs() <= eps_lin
+                && self.a12.abs() <= eps_lin
+                && self.a21.abs() <= eps_lin
+                && (self.a22 - l).abs() <= eps_lin;
             EigenSpectrum2D::RealRepeated {
                 lambda: l,
                 primary_vec: self.eigenvector_for(l),
@@ -191,20 +216,20 @@ impl Mat2 {
             }
         };
 
-        let phase_portrait_class = if det < -eps {
+        let phase_portrait_class = if det < -eps_sq {
             "Saddle Point (real opposite-sign eigenvalues)"
-        } else if det.abs() <= eps {
+        } else if det.abs() <= eps_sq {
             "Degenerate Line of Equilibria (det = 0)"
-        } else if disc < -eps {
-            if tr < -eps {
+        } else if disc < -eps_sq {
+            if tr < -eps_lin {
                 "Asymptotically Stable Spiral Sink (alpha < 0)"
-            } else if tr > eps {
+            } else if tr > eps_lin {
                 "Unstable Spiral Source (alpha > 0)"
             } else {
                 "Lyapunov Neutral Center (purely imaginary +/- i*beta)"
             }
-        } else if disc > eps {
-            if tr < -eps {
+        } else if disc > eps_sq {
+            if tr < -eps_lin {
                 "Asymptotically Stable Node / Sink (0 > lambda_1 > lambda_2)"
             } else {
                 "Unstable Node / Source (lambda_1 > lambda_2 > 0)"
@@ -241,4 +266,86 @@ pub fn orthogonal_projection_2d(target: [f64; 2], onto: [f64; 2]) -> ([f64; 2], 
     }
     let scale = (target[0] * onto[0] + target[1] * onto[1]) / denom;
     ([scale * onto[0], scale * onto[1]], scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_scalar_matrix_scales_tolerances_by_frobenius_norm() {
+        let m_pos = Mat2::new(1e-4, 0.0, 0.0, 1e-4);
+        let d_pos = m_pos.diagnostics();
+        assert_eq!(d_pos.rank, 2);
+        assert!(d_pos.inverse.is_some());
+        assert_eq!(
+            d_pos.phase_portrait_class,
+            "Unstable Star / Improper Node (repeated lambda > 0)"
+        );
+        assert!(matches!(
+            d_pos.spectrum,
+            EigenSpectrum2D::RealRepeated {
+                lambda,
+                geometric_mult: 2,
+                ..
+            } if (lambda - 1e-4).abs() < 1e-12
+        ));
+        assert!((d_pos.singular_values.0 - 1e-4).abs() < 1e-15);
+        assert!((d_pos.singular_values.1 - 1e-4).abs() < 1e-15);
+
+        let m_neg = Mat2::new(-1e-4, 0.0, 0.0, -1e-4);
+        let d_neg = m_neg.diagnostics();
+        assert_eq!(d_neg.rank, 2);
+        assert_eq!(
+            d_neg.phase_portrait_class,
+            "Stable Star / Improper Node (repeated lambda < 0)"
+        );
+
+        let m_zero = Mat2::new(0.0, 0.0, 0.0, 0.0);
+        let d_zero = m_zero.diagnostics();
+        assert_eq!(d_zero.rank, 0);
+        assert!(d_zero.inverse.is_none());
+        assert_eq!(
+            d_zero.phase_portrait_class,
+            "Degenerate Line of Equilibria (det = 0)"
+        );
+    }
+
+    #[test]
+    fn direct_svd_preserves_high_condition_number_singular_values() {
+        let m = Mat2::new(1.0, 0.0, 0.0, 1e-9);
+        let (s1, s2) = m.singular_values();
+        assert!((s1 - 1.0).abs() < 1e-15, "s1={s1}");
+        assert!((s2 - 1e-9).abs() < 1e-15, "s2={s2}");
+        assert_eq!(m.rank(), 2);
+        assert!(m.inverse().is_some());
+        let d = m.diagnostics();
+        assert_eq!(
+            d.phase_portrait_class,
+            "Unstable Node / Source (lambda_1 > lambda_2 > 0)"
+        );
+
+        let m_big = Mat2::new(1e9, 0.0, 0.0, 1.0);
+        let (b1, b2) = m_big.singular_values();
+        assert!((b1 - 1e9).abs() < 1e-6, "b1={b1}");
+        assert!((b2 - 1.0).abs() < 1e-12, "b2={b2}");
+
+        // Rotated ill-conditioned matrix: R(theta) * diag(1, 1e-9) * R(phi)
+        let theta = 0.6_f64;
+        let phi = -0.4_f64;
+        let u = Mat2::new(theta.cos(), -theta.sin(), theta.sin(), theta.cos());
+        let v_t = Mat2::new(phi.cos(), -phi.sin(), phi.sin(), phi.cos());
+        let rotated = u.mul(&Mat2::new(1.0, 0.0, 0.0, 1e-9)).mul(&v_t);
+        let (rs1, rs2) = rotated.singular_values();
+        assert!((rs1 - 1.0).abs() < 1e-12, "rs1={rs1}");
+        assert!((rs2 - 1e-9).abs() < 1e-15, "rs2={rs2}");
+
+        // Rank-1 singular matrix
+        let rank1 = Mat2::new(0.8, 0.4, 0.4, 0.2);
+        let (r1, r2) = rank1.singular_values();
+        assert!((r1 - 1.0).abs() < 1e-12);
+        assert!(r2 < 1e-12);
+        assert_eq!(rank1.rank(), 1);
+        assert!(rank1.inverse().is_none());
+    }
 }

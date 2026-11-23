@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
     binomial_pmf, compute_bayes_binary, evaluate_1d_pde, evaluate_1d_pde_custom, evaluate_field_2d,
@@ -23,12 +24,15 @@ use calc_core::{
     Mat2, PdeInitialProfile, PdeKind, PdeSnapshot, RiemannMethod,
 };
 use egui::{
-    Color32, ComboBox, Context, Frame, Margin, RichText, Rounding, Slider, TextEdit, TextStyle, Ui,
+    Color32, ComboBox, Context, Frame, Margin, RichText, Rounding, Slider, Stroke, TextEdit,
+    TextStyle, Ui,
 };
 use egui_plot::{
-    Bar, BarChart, HLine, Legend, Line, LineStyle, MarkerShape, Plot, Points, Polygon, VLine,
+    Bar, BarChart, HLine, Legend, Line, LineStyle, MarkerShape, Plot, PlotPoint, Points, Polygon,
+    Text as PlotText, VLine,
 };
 use std::f64::consts::PI;
+use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabMode {
@@ -100,6 +104,10 @@ pub struct LabState {
     pub mv_show_contours: bool,
     pub mv_show_quiver: bool,
     pub mv_show_grad_path: bool,
+    pub mv_show_3d_surface: bool,
+    pub mv_rot_yaw: f32,
+    pub mv_rot_pitch: f32,
+    pub mv_zoom_3d: f32,
     // Mode 7: ODE Phase Portraits & 1D Spectral PDEs
     pub ode_submode: OdePdeSubmode,
     pub ode_rhs_p: String,
@@ -112,6 +120,8 @@ pub struct LabState {
     pub ode_show_nullclines: bool,
     pub ode_show_equilibria: bool,
     pub ode_show_euler: bool,
+    pub ode_view_bounds: [f64; 4],
+    pub ode_reset_view: bool,
     pub pde_kind: PdeKind,
     pub pde_profile: PdeInitialProfile,
     pub pde_use_custom: bool,
@@ -122,6 +132,7 @@ pub struct LabState {
     pub pde_time: f64,
     pub pde_modes: usize,
     pub pde_animate: bool,
+    pub export_status_msg: Option<(bool, String)>,
     // Mode 8: Probability Distributions, Bayesian Updating & OLS Regression
     pub stats_dist: DistributionKind,
     pub stats_param_a: f64,
@@ -177,6 +188,10 @@ impl Default for LabState {
             mv_show_contours: true,
             mv_show_quiver: true,
             mv_show_grad_path: true,
+            mv_show_3d_surface: false,
+            mv_rot_yaw: 0.65,
+            mv_rot_pitch: 0.48,
+            mv_zoom_3d: 1.0,
             ode_submode: OdePdeSubmode::OdePhasePortrait,
             ode_rhs_p: "y".to_string(),
             ode_rhs_q: "-2.0*x - 0.35*y".to_string(),
@@ -188,6 +203,8 @@ impl Default for LabState {
             ode_show_nullclines: true,
             ode_show_equilibria: true,
             ode_show_euler: true,
+            ode_view_bounds: [-3.5, 3.5, -3.5, 3.5],
+            ode_reset_view: false,
             pde_kind: PdeKind::HeatDiffusion,
             pde_profile: PdeInitialProfile::SquarePulse,
             pde_use_custom: false,
@@ -198,6 +215,7 @@ impl Default for LabState {
             pde_time: 0.20,
             pde_modes: 18,
             pde_animate: false,
+            export_status_msg: None,
             stats_dist: DistributionKind::Normal,
             stats_param_a: 0.0,
             stats_param_b: 1.0,
@@ -464,6 +482,14 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
             ui.horizontal_wrapped(|ui| {
                 ui.add(Slider::new(&mut state.alg_probe_x, -6.0..=6.0).text("Anchor x0"));
                 ui.add(Slider::new(&mut state.alg_step_h, -2.5..=2.5).text("Secant step h"));
+                if let Ok(fe) = Expr::parse(&state.alg_primary) {
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_alg_f_latex",
+                        &fe.to_latex(),
+                        "Copy primary f(x) expression as LaTeX",
+                    );
+                }
             });
         });
 
@@ -554,18 +580,26 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
         .rounding(Rounding::same(6.0))
         .inner_margin(Margin::same(10.0))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "At x0 = {:.3}: f(x0) = {:.4} | Difference Quotient (h = {:.3}) = {:.5} | Limit Slope f'(x0) = {:.5}  [symbolic f'(x) = {}]",
-                    state.alg_probe_x,
-                    y0,
-                    h_eff,
-                    dq_curr,
-                    exact_slope,
-                    df_sym.to_plain_string()
-                ))
-                .monospace(),
-            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "At x0 = {:.3}: f(x0) = {:.4} | Difference Quotient (h = {:.3}) = {:.5} | Limit Slope f'(x0) = {:.5}  [symbolic f'(x) = {}]",
+                        state.alg_probe_x,
+                        y0,
+                        h_eff,
+                        dq_curr,
+                        exact_slope,
+                        df_sym.to_plain_string()
+                    ))
+                    .monospace(),
+                );
+                math_render::copy_latex_button(
+                    ui,
+                    "lab_alg_df_latex",
+                    &df_sym.to_latex(),
+                    "Copy symbolic derivative f'(x) as LaTeX",
+                );
+            });
         });
 }
 
@@ -746,6 +780,14 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
                 ui.checkbox(&mut state.calc_show_secant_tangent, "Secant & Tangent");
                 ui.checkbox(&mut state.calc_show_riemann, "Riemann / Darboux Area");
                 ui.checkbox(&mut state.calc_show_taylor, "Taylor Polynomial T_n(x)");
+                if let Ok(ce) = Expr::parse(&state.calc_expr) {
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_calc_f_latex",
+                        &ce.to_latex(),
+                        "Copy f(x) expression as LaTeX",
+                    );
+                }
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -901,16 +943,24 @@ fn render_single_var_calc_lab(ui: &mut Ui, state: &mut LabState, theme: Academic
         .show(ui, |ui| {
             let y0 = parsed.eval_1d("x", state.calc_x0);
             let m_tan = deriv.eval_1d("x", state.calc_x0);
-            ui.label(
-                RichText::new(format!(
-                    "Symbolic f'(x) = {}  |  At x0 = {:.2}: f(x0) = {:.4}, f'(x0) = {:.4}",
-                    deriv.to_plain_string(),
-                    state.calc_x0,
-                    y0,
-                    m_tan
-                ))
-                .monospace(),
-            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Symbolic f'(x) = {}  |  At x0 = {:.2}: f(x0) = {:.4}, f'(x0) = {:.4}",
+                        deriv.to_plain_string(),
+                        state.calc_x0,
+                        y0,
+                        m_tan
+                    ))
+                    .monospace(),
+                );
+                math_render::copy_latex_button(
+                    ui,
+                    "lab_calc_df_latex",
+                    &deriv.to_latex(),
+                    "Copy symbolic derivative f'(x) as LaTeX",
+                );
+            });
             ui.label(
                 RichText::new(format!(
                     "Integral [{:.2}, {:.2}] ({}, N={}): {:.6}  |  Adaptive Simpson = {:.6}  |  |Error| = {:.2e}",
@@ -1237,6 +1287,14 @@ fn render_epsilon_delta_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                 ui.add(Slider::new(&mut state.eps_x0, -3.0..=3.0).text("Point x0"));
                 ui.add(Slider::new(&mut state.eps_target, 0.05..=1.5).text("Target epsilon"));
                 ui.add(Slider::new(&mut state.eps_delta, 0.005..=1.2).text("Candidate delta"));
+                if let Ok(ee) = Expr::parse(&state.eps_expr) {
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_eps_f_latex",
+                        &ee.to_latex(),
+                        "Copy epsilon-delta f(x) expression as LaTeX",
+                    );
+                }
             });
         });
 
@@ -1349,77 +1407,137 @@ fn render_epsilon_delta_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
         });
 }
 
-fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
-    Frame::none()
-        .fill(theme.card_fill())
-        .stroke(theme.card_stroke())
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::same(10.0))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Scalar f(x, y) =");
-                ui.add(
-                    TextEdit::singleline(&mut state.mv_scalar)
-                        .desired_width(180.0)
-                        .font(TextStyle::Monospace),
-                );
-                ui.label("Vector F = <P, Q>:");
-                ui.add(
-                    TextEdit::singleline(&mut state.mv_vec_p)
-                        .desired_width(120.0)
-                        .font(TextStyle::Monospace),
-                );
-                ui.add(
-                    TextEdit::singleline(&mut state.mv_vec_q)
-                        .desired_width(120.0)
-                        .font(TextStyle::Monospace),
-                );
-                if ui.small_button("Set F = grad f").clicked() {
-                    if let Ok(sf) = Expr::parse(&state.mv_scalar) {
-                        state.mv_vec_p = sf.differentiate("x").to_plain_string();
-                        state.mv_vec_q = sf.differentiate("y").to_plain_string();
-                    }
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.add(Slider::new(&mut state.mv_probe_x, -2.8..=2.8).text("Probe x0"));
-                ui.add(Slider::new(&mut state.mv_probe_y, -2.8..=2.8).text("Probe y0"));
-                ui.checkbox(&mut state.mv_show_contours, "Level Contours");
-                ui.checkbox(&mut state.mv_show_quiver, "Vector Quiver");
-                ui.checkbox(&mut state.mv_show_grad_path, "Gradient Ascent Path");
-                ui.label(
-                    RichText::new("(Tip: click anywhere in the plot to move probe)")
-                        .small()
-                        .weak(),
-                );
-            });
-        });
+pub(crate) fn diverging_perceptual_color(t_raw: f64) -> Color32 {
+    let t = t_raw.clamp(-1.0, 1.0);
+    let mid = [176.0_f64, 184.0, 198.0];
+    let (r, g, b) = if t < 0.0 {
+        let low = [59.0_f64, 102.0, 204.0];
+        let u = t + 1.0;
+        (
+            low[0] + u * (mid[0] - low[0]),
+            low[1] + u * (mid[1] - low[1]),
+            low[2] + u * (mid[2] - low[2]),
+        )
+    } else {
+        let high = [218.0_f64, 72.0, 58.0];
+        let u = t;
+        (
+            mid[0] + u * (high[0] - mid[0]),
+            mid[1] + u * (high[1] - mid[1]),
+            mid[2] + u * (high[2] - mid[2]),
+        )
+    };
+    Color32::from_rgb(r.round() as u8, g.round() as u8, b.round() as u8)
+}
 
-    let sf = match Expr::parse(&state.mv_scalar) {
-        Ok(e) => e,
-        Err(err) => {
-            ui.label(RichText::new(format!("f(x, y) error: {}", err)).color(theme.err_color()));
-            return;
-        }
+pub(crate) fn nice_contour_levels(z_min: f64, z_max: f64, target_count: usize) -> Vec<f64> {
+    let span = z_max - z_min;
+    if !z_min.is_finite() || !z_max.is_finite() || !span.is_finite() || span < 1e-9 {
+        return Vec::new();
+    }
+    let count = target_count.clamp(3, 15);
+    let raw_step = span / (count as f64);
+    let mag = 10.0_f64.powf(raw_step.log10().floor());
+    let norm = raw_step / mag;
+    let nice_mult = if norm <= 1.25 {
+        1.0
+    } else if norm <= 2.25 {
+        2.0
+    } else if norm <= 3.5 {
+        2.5
+    } else if norm <= 7.0 {
+        5.0
+    } else {
+        10.0
     };
-    let vp = match Expr::parse(&state.mv_vec_p) {
-        Ok(e) => e,
-        Err(err) => {
-            ui.label(RichText::new(format!("P(x, y) error: {}", err)).color(theme.err_color()));
-            return;
+    let step = nice_mult * mag;
+    let margin = 0.02 * span;
+    let k_start = ((z_min + margin) / step).ceil() as i64;
+    let k_end = ((z_max - margin) / step).floor() as i64;
+    let mut levels = Vec::new();
+    for k in k_start..=k_end {
+        let mut lvl = (k as f64) * step;
+        if lvl.abs() < 1e-12 * span.max(1.0) {
+            lvl = 0.0;
         }
-    };
-    let vq = match Expr::parse(&state.mv_vec_q) {
-        Ok(e) => e,
-        Err(err) => {
-            ui.label(RichText::new(format!("Q(x, y) error: {}", err)).color(theme.err_color()));
-            return;
+        levels.push(lvl);
+    }
+    if levels.len() < 3 {
+        levels.clear();
+        for idx in 1..=7 {
+            levels.push(z_min + (idx as f64 / 8.0) * span);
         }
-    };
+    }
+    levels
+}
+
+pub(crate) fn format_contour_label(val: f64) -> String {
+    if val.abs() < 1e-9 {
+        "0".to_string()
+    } else if (val - val.round()).abs() < 1e-6 && val.abs() < 1e6 {
+        format!("{}", val.round() as i64)
+    } else if val.abs() >= 100.0 || val.abs() < 0.01 {
+        format!("{:.2e}", val)
+    } else {
+        let s = format!("{:.2}", val);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+pub(crate) fn project_3d_surface_point(
+    x: f64,
+    y: f64,
+    z_norm: f64,
+    yaw: f32,
+    pitch: f32,
+    zoom: f32,
+    center: egui::Pos2,
+    scale_px: f32,
+) -> (egui::Pos2, f32) {
+    let (sy, cy) = (yaw as f64).sin_cos();
+    let (sp, cp) = (pitch as f64).sin_cos();
+    let xr = x * cy - y * sy;
+    let yr = x * sy + y * cy;
+    let up = z_norm * cp + yr * sp;
+    let depth = yr * cp - z_norm * sp;
+    let cam_dist = 14.0_f64;
+    let persp = (cam_dist / (cam_dist + depth).max(2.0)) * (zoom as f64);
+    let sx = center.x + (xr * persp) as f32 * scale_px;
+    let sy_screen = center.y - (up * persp) as f32 * scale_px;
+    (egui::pos2(sx, sy_screen), depth as f32)
+}
+
+fn contour_level_param(lvl: f64, z_min: f64, z_max: f64) -> f64 {
+    if z_min < 0.0 && z_max > 0.0 {
+        let abs_max = z_min.abs().max(z_max.abs()).max(1e-9);
+        (lvl / abs_max).clamp(-1.0, 1.0)
+    } else {
+        let span = (z_max - z_min).max(1e-9);
+        (2.0 * (lvl - z_min) / span - 1.0).clamp(-1.0, 1.0)
+    }
+}
+
+fn render_multivariable_2d_plot(
+    ui: &mut Ui,
+    state: &mut LabState,
+    sf: &Expr,
+    vp: &Expr,
+    vq: &Expr,
+    z_min: f64,
+    z_max: f64,
+    levels: &[f64],
+    z_grid: &[Vec<f64>],
+    grid_n: usize,
+) {
+    let min_c = -3.0_f64;
+    let max_c = 3.0_f64;
+    let step = (max_c - min_c) / (grid_n as f64);
 
     Plot::new("multivariable_field_plot")
         .height(390.0)
         .data_aspect(1.0)
+        .x_axis_label("x")
+        .y_axis_label("y")
         .legend(Legend::default())
         .show(ui, |plot_ui| {
             if plot_ui.response().clicked() {
@@ -1430,22 +1548,15 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
             }
 
             if state.mv_show_contours {
-                let grid_n = 36usize;
-                let min_c = -3.0_f64;
-                let max_c = 3.0_f64;
-                let step = (max_c - min_c) / (grid_n as f64);
-                let mut z_grid = vec![vec![0.0_f64; grid_n + 1]; grid_n + 1];
-                for i in 0..=grid_n {
-                    let x = min_c + (i as f64) * step;
-                    for j in 0..=grid_n {
-                        let y = min_c + (j as f64) * step;
-                        z_grid[i][j] = sf.eval_2d(x, y);
-                    }
-                }
-
-                let levels: &[f64] = &[-3.0, -2.0, -1.0, -0.4, 0.0, 0.4, 1.0, 2.0, 3.0];
                 let mut first_seg = true;
+                let mut placed_labels: Vec<[f64; 2]> = Vec::new();
                 for &lvl in levels {
+                    let t_col = contour_level_param(lvl, z_min, z_max);
+                    let c_rgb = diverging_perceptual_color(t_col);
+                    let is_zero = lvl.abs() < 1e-12;
+                    let stroke_w = if is_zero { 1.8_f32 } else { 1.25_f32 };
+                    let mut seg_midpoints: Vec<[f64; 2]> = Vec::new();
+
                     for i in 0..grid_n {
                         let x0 = min_c + (i as f64) * step;
                         let x1 = x0 + step;
@@ -1481,15 +1592,53 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                                 }
                             }
                             if hits.len() >= 2 {
+                                seg_midpoints.push([
+                                    0.5 * (hits[0][0] + hits[1][0]),
+                                    0.5 * (hits[0][1] + hits[1][1]),
+                                ]);
                                 let mut line = Line::new(vec![hits[0], hits[1]])
-                                    .color(Color32::from_rgba_unmultiplied(120, 155, 200, 130))
-                                    .width(1.1_f32);
+                                    .color(c_rgb)
+                                    .width(stroke_w);
                                 if first_seg {
-                                    line = line.name("Level Curves f(x,y) = c");
+                                    line = line.name("Level Contours f(x,y) = c");
                                     first_seg = false;
                                 }
                                 plot_ui.line(line);
                             }
+                        }
+                    }
+
+                    // Place at most one non-overlapping level label per contour value near domain interior
+                    if !seg_midpoints.is_empty() {
+                        let candidate = seg_midpoints
+                            .iter()
+                            .copied()
+                            .filter(|pt| pt[0].abs() <= 2.4 && pt[1].abs() <= 2.4)
+                            .find(|pt| {
+                                placed_labels
+                                    .iter()
+                                    .all(|prev| (prev[0] - pt[0]).hypot(prev[1] - pt[1]) >= 0.55)
+                            })
+                            .or_else(|| {
+                                let mid = seg_midpoints[seg_midpoints.len() / 2];
+                                if placed_labels
+                                    .iter()
+                                    .all(|prev| (prev[0] - mid[0]).hypot(prev[1] - mid[1]) >= 0.45)
+                                {
+                                    Some(mid)
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(lbl_pt) = candidate {
+                            placed_labels.push(lbl_pt);
+                            plot_ui.text(
+                                PlotText::new(
+                                    PlotPoint::new(lbl_pt[0], lbl_pt[1]),
+                                    format_contour_label(lvl),
+                                )
+                                .color(c_rgb),
+                            );
                         }
                     }
                 }
@@ -1571,6 +1720,367 @@ fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTh
                     .name("Probe (x0, y0)"),
             );
         });
+}
+
+fn render_3d_surface_mesh(
+    ui: &mut Ui,
+    state: &mut LabState,
+    sf: &Expr,
+    z_min: f64,
+    z_max: f64,
+    theme: AcademicTheme,
+) {
+    let desired = egui::vec2(ui.available_width().max(260.0), 390.0);
+    let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    if response.dragged() {
+        let delta = response.drag_delta();
+        state.mv_rot_yaw += delta.x * 0.012;
+        state.mv_rot_pitch = (state.mv_rot_pitch + delta.y * 0.012).clamp(-1.45, 1.45);
+    }
+    if response.hovered() {
+        let scroll = ui.ctx().input(|i| i.raw_scroll_delta.y);
+        if scroll.abs() > 0.1 {
+            state.mv_zoom_3d = (state.mv_zoom_3d * (1.0 + scroll * 0.002)).clamp(0.55, 2.2);
+        }
+    }
+    if response.double_clicked() {
+        state.mv_rot_yaw = 0.65;
+        state.mv_rot_pitch = 0.48;
+        state.mv_zoom_3d = 1.0;
+    }
+
+    let bg = match theme {
+        AcademicTheme::SlateDark => Color32::from_rgb(16, 20, 27),
+        AcademicTheme::PaperLight => Color32::from_rgb(250, 249, 244),
+    };
+    let axis_col = match theme {
+        AcademicTheme::SlateDark => Color32::from_rgb(150, 162, 182),
+        AcademicTheme::PaperLight => Color32::from_rgb(75, 85, 102),
+    };
+    let wire_col = match theme {
+        AcademicTheme::SlateDark => Color32::from_rgba_unmultiplied(20, 25, 34, 130),
+        AcademicTheme::PaperLight => Color32::from_rgba_unmultiplied(40, 48, 60, 95),
+    };
+
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, Rounding::same(6.0), bg);
+    painter.rect_stroke(rect, Rounding::same(6.0), theme.card_stroke());
+
+    let center = rect.center();
+    let scale_px = rect.width().min(rect.height()) * 0.115;
+    let z_span = (z_max - z_min).max(1e-6);
+    let z_mid = 0.5 * (z_min + z_max);
+    let normalize_z = |zv: f64| -> f64 { ((zv - z_mid) / z_span) * 3.6 };
+
+    let mesh_n = 28usize;
+    let min_c = -3.0_f64;
+    let max_c = 3.0_f64;
+    let step = (max_c - min_c) / (mesh_n as f64);
+
+    let mut pts_2d = vec![vec![(egui::Pos2::ZERO, 0.0_f32, f64::NAN); mesh_n + 1]; mesh_n + 1];
+    for i in 0..=mesh_n {
+        let x = min_c + (i as f64) * step;
+        for j in 0..=mesh_n {
+            let y = min_c + (j as f64) * step;
+            let zv = sf.eval_2d(x, y);
+            if zv.is_finite() {
+                let zn = normalize_z(zv.clamp(z_min - 0.5 * z_span, z_max + 0.5 * z_span));
+                let (sp, d) = project_3d_surface_point(
+                    x,
+                    y,
+                    zn,
+                    state.mv_rot_yaw,
+                    state.mv_rot_pitch,
+                    state.mv_zoom_3d,
+                    center,
+                    scale_px,
+                );
+                pts_2d[i][j] = (sp, d, zv);
+            }
+        }
+    }
+
+    struct QuadCell {
+        depth: f32,
+        corners: [egui::Pos2; 4],
+        fill: Color32,
+    }
+    let mut quads = Vec::with_capacity(mesh_n * mesh_n);
+    for i in 0..mesh_n {
+        for j in 0..mesh_n {
+            let c00 = pts_2d[i][j];
+            let c10 = pts_2d[i + 1][j];
+            let c11 = pts_2d[i + 1][j + 1];
+            let c01 = pts_2d[i][j + 1];
+            if !c00.2.is_finite() || !c10.2.is_finite() || !c11.2.is_finite() || !c01.2.is_finite()
+            {
+                continue;
+            }
+            let avg_z = 0.25 * (c00.2 + c10.2 + c11.2 + c01.2);
+            let avg_depth = 0.25 * (c00.1 + c10.1 + c11.1 + c01.1);
+            let t_col = contour_level_param(avg_z, z_min, z_max);
+            let base = diverging_perceptual_color(t_col);
+            let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 220);
+            quads.push(QuadCell {
+                depth: avg_depth,
+                corners: [c00.0, c10.0, c11.0, c01.0],
+                fill,
+            });
+        }
+    }
+    quads.sort_by(|a, b| {
+        b.depth
+            .partial_cmp(&a.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for q in quads {
+        painter.add(egui::Shape::convex_polygon(
+            q.corners.to_vec(),
+            q.fill,
+            Stroke::new(0.6_f32, wire_col),
+        ));
+    }
+
+    // 3D bounding axes (x, y, z)
+    let z_lo = -1.8_f64;
+    let z_hi = 1.8_f64;
+    let proj = |x: f64, y: f64, zn: f64| -> egui::Pos2 {
+        project_3d_surface_point(
+            x,
+            y,
+            zn,
+            state.mv_rot_yaw,
+            state.mv_rot_pitch,
+            state.mv_zoom_3d,
+            center,
+            scale_px,
+        )
+        .0
+    };
+    let o = proj(-3.0, -3.0, z_lo);
+    let px = proj(3.2, -3.0, z_lo);
+    let py = proj(-3.0, 3.2, z_lo);
+    let pz = proj(-3.0, -3.0, z_hi + 0.35);
+    painter.line_segment([o, px], Stroke::new(1.5_f32, axis_col));
+    painter.line_segment([o, py], Stroke::new(1.5_f32, axis_col));
+    painter.line_segment([o, pz], Stroke::new(1.5_f32, axis_col));
+    let font = egui::FontId::monospace(11.5);
+    painter.text(px, egui::Align2::LEFT_CENTER, "x (+3)", font.clone(), axis_col);
+    painter.text(py, egui::Align2::LEFT_CENTER, "y (+3)", font.clone(), axis_col);
+    painter.text(
+        pz,
+        egui::Align2::LEFT_BOTTOM,
+        format!("z max={}", format_contour_label(z_max)),
+        font.clone(),
+        axis_col,
+    );
+    painter.text(
+        o,
+        egui::Align2::RIGHT_TOP,
+        format!("z min={}", format_contour_label(z_min)),
+        font.clone(),
+        axis_col,
+    );
+
+    // Active probe dot on 3D surface
+    let probe_z = sf.eval_2d(state.mv_probe_x, state.mv_probe_y);
+    if probe_z.is_finite() {
+        let p_screen = proj(
+            state.mv_probe_x,
+            state.mv_probe_y,
+            normalize_z(probe_z.clamp(z_min - 0.5 * z_span, z_max + 0.5 * z_span)),
+        );
+        painter.circle_filled(p_screen, 5.5_f32, Color32::from_rgb(232, 168, 72));
+        painter.circle_stroke(p_screen, 5.5_f32, Stroke::new(1.4_f32, Color32::WHITE));
+    }
+
+    painter.text(
+        rect.min + egui::vec2(10.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        "3D Surface z = f(x, y)  [Drag to orbit | Wheel to zoom | Double-click reset]",
+        egui::FontId::proportional(11.5),
+        axis_col,
+    );
+}
+
+fn render_multivariable_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
+    Frame::none()
+        .fill(theme.card_fill())
+        .stroke(theme.card_stroke())
+        .rounding(Rounding::same(6.0))
+        .inner_margin(Margin::same(10.0))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Scalar f(x, y) =");
+                ui.add(
+                    TextEdit::singleline(&mut state.mv_scalar)
+                        .desired_width(180.0)
+                        .font(TextStyle::Monospace),
+                );
+                if let Ok(fe) = Expr::parse(&state.mv_scalar) {
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_mv_scalar_latex",
+                        &fe.to_latex(),
+                        "Copy scalar surface f(x, y) as LaTeX",
+                    );
+                }
+                ui.label("Vector F = <P, Q>:");
+                ui.add(
+                    TextEdit::singleline(&mut state.mv_vec_p)
+                        .desired_width(115.0)
+                        .font(TextStyle::Monospace),
+                );
+                ui.add(
+                    TextEdit::singleline(&mut state.mv_vec_q)
+                        .desired_width(115.0)
+                        .font(TextStyle::Monospace),
+                );
+                if ui
+                    .small_button("Set F = grad f")
+                    .on_hover_text("Populate F = <df/dx, df/dy> symbolically from f(x, y)")
+                    .clicked()
+                {
+                    if let Ok(sf) = Expr::parse(&state.mv_scalar) {
+                        state.mv_vec_p = sf.differentiate("x").to_plain_string();
+                        state.mv_vec_q = sf.differentiate("y").to_plain_string();
+                    }
+                }
+                if let (Ok(pe), Ok(qe)) = (Expr::parse(&state.mv_vec_p), Expr::parse(&state.mv_vec_q))
+                {
+                    let vec_tex =
+                        format!(r"\left\langle {},\, {} \right\rangle", pe.to_latex(), qe.to_latex());
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_mv_vec_latex",
+                        &vec_tex,
+                        "Copy vector field F = <P, Q> as LaTeX",
+                    );
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.add(Slider::new(&mut state.mv_probe_x, -2.8..=2.8).text("Probe x0"));
+                ui.add(Slider::new(&mut state.mv_probe_y, -2.8..=2.8).text("Probe y0"));
+                ui.checkbox(&mut state.mv_show_contours, "Level Contours")
+                    .on_hover_text("Draw auto-scaled diverging perceptual contours f(x, y) = c");
+                ui.checkbox(&mut state.mv_show_quiver, "Vector Quiver")
+                    .on_hover_text("Overlay vector field arrows F(x, y) = <P, Q>");
+                ui.checkbox(&mut state.mv_show_grad_path, "Gradient Ascent Path")
+                    .on_hover_text("Integrate steepest ascent path along +grad f from probe");
+                ui.checkbox(&mut state.mv_show_3d_surface, "3D Surface Mesh z=f(x,y)")
+                    .on_hover_text("Toggle rotatable 3D perspective surface mesh alongside 2D contours");
+            });
+            if state.mv_show_3d_surface {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(Slider::new(&mut state.mv_rot_yaw, -3.14..=3.14).text("3D Yaw"));
+                    ui.add(Slider::new(&mut state.mv_rot_pitch, -1.45..=1.45).text("3D Pitch"));
+                    ui.add(Slider::new(&mut state.mv_zoom_3d, 0.55..=2.2).text("3D Zoom"));
+                    if ui.small_button("Reset 3D View").clicked() {
+                        state.mv_rot_yaw = 0.65;
+                        state.mv_rot_pitch = 0.48;
+                        state.mv_zoom_3d = 1.0;
+                    }
+                });
+            }
+        });
+
+    let sf = match Expr::parse(&state.mv_scalar) {
+        Ok(e) => e,
+        Err(err) => {
+            ui.label(RichText::new(format!("f(x, y) error: {}", err)).color(theme.err_color()));
+            return;
+        }
+    };
+    let vp = match Expr::parse(&state.mv_vec_p) {
+        Ok(e) => e,
+        Err(err) => {
+            ui.label(RichText::new(format!("P(x, y) error: {}", err)).color(theme.err_color()));
+            return;
+        }
+    };
+    let vq = match Expr::parse(&state.mv_vec_q) {
+        Ok(e) => e,
+        Err(err) => {
+            ui.label(RichText::new(format!("Q(x, y) error: {}", err)).color(theme.err_color()));
+            return;
+        }
+    };
+
+    // Sample scalar field for auto-scaled contours & 3D color ramp
+    let grid_n = 44usize;
+    let min_c = -3.0_f64;
+    let max_c = 3.0_f64;
+    let step = (max_c - min_c) / (grid_n as f64);
+    let mut z_grid = vec![vec![0.0_f64; grid_n + 1]; grid_n + 1];
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+    for i in 0..=grid_n {
+        let x = min_c + (i as f64) * step;
+        for j in 0..=grid_n {
+            let y = min_c + (j as f64) * step;
+            let zv = sf.eval_2d(x, y);
+            z_grid[i][j] = zv;
+            if zv.is_finite() {
+                z_min = z_min.min(zv);
+                z_max = z_max.max(zv);
+            }
+        }
+    }
+    if !z_min.is_finite() || !z_max.is_finite() {
+        z_min = -1.0;
+        z_max = 1.0;
+    }
+    let levels = nice_contour_levels(z_min, z_max, 11);
+
+    if state.mv_show_contours && !levels.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Contour Color Ramp:").small().strong());
+            for (idx, &t) in [-1.0, -0.5, 0.0, 0.5, 1.0].iter().enumerate() {
+                let c = diverging_perceptual_color(t);
+                let (r_sw, _) = ui.allocate_exact_size(egui::vec2(14.0, 12.0), egui::Sense::hover());
+                ui.painter().rect_filled(r_sw, Rounding::same(2.0), c);
+                if idx == 0 {
+                    ui.label(RichText::new(format!("min {}", format_contour_label(z_min))).small().monospace());
+                } else if idx == 2 && z_min < 0.0 && z_max > 0.0 {
+                    ui.label(RichText::new("0").small().monospace());
+                } else if idx == 4 {
+                    ui.label(RichText::new(format!("max {}", format_contour_label(z_max))).small().monospace());
+                }
+            }
+            ui.label(RichText::new("(Click 2D plot to move probe)").small().weak());
+        });
+    }
+
+    if state.mv_show_3d_surface {
+        ui.columns(2, |cols| {
+            render_multivariable_2d_plot(
+                &mut cols[0],
+                state,
+                &sf,
+                &vp,
+                &vq,
+                z_min,
+                z_max,
+                &levels,
+                &z_grid,
+                grid_n,
+            );
+            render_3d_surface_mesh(&mut cols[1], state, &sf, z_min, z_max, theme);
+        });
+    } else {
+        render_multivariable_2d_plot(
+            ui,
+            state,
+            &sf,
+            &vp,
+            &vq,
+            z_min,
+            z_max,
+            &levels,
+            &z_grid,
+            grid_n,
+        );
+    }
 
     let diag = evaluate_field_2d(&sf, &vp, &vq, state.mv_probe_x, state.mv_probe_y);
     ui.add_space(6.0);
@@ -1636,6 +2146,120 @@ fn render_ode_pde_lab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: A
     }
 }
 
+pub(crate) fn compute_adaptive_quiver_grid(bounds: [f64; 4], grid_n: usize) -> (Vec<[f64; 2]>, f64) {
+    let [mut x_min, mut x_max, mut y_min, mut y_max] = bounds;
+    if !x_min.is_finite()
+        || !x_max.is_finite()
+        || !y_min.is_finite()
+        || !y_max.is_finite()
+        || (x_max - x_min) <= 1e-6
+        || (y_max - y_min) <= 1e-6
+    {
+        x_min = -3.5;
+        x_max = 3.5;
+        y_min = -3.5;
+        y_max = 3.5;
+    }
+    let n = grid_n.clamp(5, 30);
+    let dx = (x_max - x_min) / (n as f64);
+    let dy = (y_max - y_min) / (n as f64);
+    let cell = dx.min(dy);
+    let mut pts = Vec::with_capacity(n * n);
+    for ix in 0..n {
+        let x = x_min + (ix as f64 + 0.5) * dx;
+        for iy in 0..n {
+            let y = y_min + (iy as f64 + 0.5) * dy;
+            pts.push([x, y]);
+        }
+    }
+    (pts, cell)
+}
+
+pub(crate) fn direction_arrow_geometry(
+    x: f64,
+    y: f64,
+    ux: f64,
+    uy: f64,
+    cell_size: f64,
+) -> ([f64; 2], [f64; 2], [[f64; 2]; 3]) {
+    let len = (0.52 * cell_size).max(1e-6);
+    let tail = [x - 0.35 * len * ux, y - 0.35 * len * uy];
+    let tip = [x + 0.65 * len * ux, y + 0.65 * len * uy];
+    let head = 0.30 * len;
+    let wing1 = [
+        tip[0] - head * (ux * 0.85 - uy * 0.52),
+        tip[1] - head * (uy * 0.85 + ux * 0.52),
+    ];
+    let wing2 = [
+        tip[0] - head * (ux * 0.85 + uy * 0.52),
+        tip[1] - head * (uy * 0.85 - ux * 0.52),
+    ];
+    (tail, tip, [wing1, tip, wing2])
+}
+
+pub(crate) fn format_ode_curves_csv(rk4_timed: &[[f64; 3]], euler_timed: &[[f64; 3]]) -> String {
+    let mut csv = String::new();
+    if euler_timed.is_empty() {
+        csv.push_str("t,x_rk4,y_rk4\n");
+        for pt in rk4_timed {
+            let _ = writeln!(csv, "{:.8},{:.8},{:.8}", pt[0], pt[1], pt[2]);
+        }
+    } else {
+        csv.push_str("t,x_rk4,y_rk4,x_euler,y_euler\n");
+        let n = rk4_timed.len().max(euler_timed.len());
+        for idx in 0..n {
+            let t_val = rk4_timed
+                .get(idx)
+                .map(|p| p[0])
+                .or_else(|| euler_timed.get(idx).map(|p| p[0]))
+                .unwrap_or(0.0);
+            let rk4_cols = rk4_timed
+                .get(idx)
+                .map(|p| format!("{:.8},{:.8}", p[1], p[2]))
+                .unwrap_or_else(|| ",".to_string());
+            let euler_cols = euler_timed
+                .get(idx)
+                .map(|p| format!("{:.8},{:.8}", p[1], p[2]))
+                .unwrap_or_else(|| ",".to_string());
+            let _ = writeln!(csv, "{:.8},{},{}", t_val, rk4_cols, euler_cols);
+        }
+    }
+    csv
+}
+
+pub(crate) fn format_pde_curves_csv(snap: &PdeSnapshot) -> String {
+    let mut csv = String::from("x,u_initial,u_m_t0,u_evolved\n");
+    for (idx, pt) in snap.initial_curve.iter().enumerate() {
+        let u_rec = snap
+            .reconstructed_t0_curve
+            .get(idx)
+            .map(|p| p[1])
+            .unwrap_or(f64::NAN);
+        let u_ev = snap
+            .evolved_curve
+            .get(idx)
+            .map(|p| p[1])
+            .unwrap_or(f64::NAN);
+        let _ = writeln!(csv, "{:.8},{:.8},{:.8},{:.8}", pt[0], pt[1], u_rec, u_ev);
+    }
+    csv
+}
+
+fn save_csv_via_dialog(default_name: &str, csv_content: &str) -> (bool, String) {
+    if let Some(out_path) = rfd::FileDialog::new()
+        .set_file_name(default_name)
+        .add_filter("CSV Data", &["csv"])
+        .save_file()
+    {
+        match std::fs::write(&out_path, csv_content) {
+            Ok(()) => (false, format!("Exported CSV to {}", out_path.display())),
+            Err(e) => (true, format!("CSV export write error: {}", e)),
+        }
+    } else {
+        (false, "CSV export cancelled.".to_string())
+    }
+}
+
 fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
     Frame::none()
         .fill(theme.card_fill())
@@ -1645,35 +2269,63 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Presets:").strong());
-                if ui.small_button("Damped Oscillator").clicked() {
+                if ui
+                    .small_button("Damped Oscillator")
+                    .on_hover_text("Load damped harmonic oscillator: x' = y, y' = -2x - 0.35y")
+                    .clicked()
+                {
                     state.ode_rhs_p = "y".to_string();
                     state.ode_rhs_q = "-2.0*x - 0.35*y".to_string();
                     state.ode_seed_x = 2.2;
                     state.ode_seed_y = 0.0;
                 }
-                if ui.small_button("Nonlinear Pendulum").clicked() {
+                if ui
+                    .small_button("Nonlinear Pendulum")
+                    .on_hover_text("Load damped nonlinear pendulum: x' = y, y' = -2 sin(x) - 0.15y")
+                    .clicked()
+                {
                     state.ode_rhs_p = "y".to_string();
                     state.ode_rhs_q = "-2.0*sin(x) - 0.15*y".to_string();
                     state.ode_seed_x = 2.4;
                     state.ode_seed_y = 0.2;
                 }
-                if ui.small_button("Lotka-Volterra").clicked() {
+                if ui
+                    .small_button("Lotka-Volterra")
+                    .on_hover_text("Load predator-prey Lotka-Volterra system with center at (1.5, 1.5)")
+                    .clicked()
+                {
                     state.ode_rhs_p = "x * (1.2 - 0.8*y)".to_string();
                     state.ode_rhs_q = "y * (-0.9 + 0.6*x)".to_string();
                     state.ode_seed_x = 1.8;
                     state.ode_seed_y = 0.8;
                 }
-                if ui.small_button("Van der Pol Cycle").clicked() {
+                if ui
+                    .small_button("Van der Pol Cycle")
+                    .on_hover_text("Load Van der Pol nonlinear limit-cycle oscillator (mu = 1.1)")
+                    .clicked()
+                {
                     state.ode_rhs_p = "y".to_string();
                     state.ode_rhs_q = "1.1*(1 - x^2)*y - x".to_string();
                     state.ode_seed_x = 0.35;
                     state.ode_seed_y = 0.25;
                 }
-                if ui.small_button("Saddle Portrait").clicked() {
+                if ui
+                    .small_button("Saddle Portrait")
+                    .on_hover_text("Load hyperbolic saddle portrait with stable and unstable manifolds")
+                    .clicked()
+                {
                     state.ode_rhs_p = "x + 0.5*y".to_string();
                     state.ode_rhs_q = "0.5*x - y".to_string();
                     state.ode_seed_x = 0.4;
                     state.ode_seed_y = 2.2;
+                }
+                if ui
+                    .small_button("Reset View")
+                    .on_hover_text("Reset phase-plane viewport bounds back to [-3.5, 3.5]^2")
+                    .clicked()
+                {
+                    state.ode_view_bounds = [-3.5, 3.5, -3.5, 3.5];
+                    state.ode_reset_view = true;
                 }
             });
 
@@ -1681,26 +2333,50 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                 ui.label("dx/dt = P(x, y) =");
                 ui.add(
                     TextEdit::singleline(&mut state.ode_rhs_p)
-                        .desired_width(185.0)
+                        .desired_width(180.0)
                         .font(TextStyle::Monospace),
-                );
+                )
+                .on_hover_text("Autonomous x'(t) = P(x, y) expression in variables x and y");
                 ui.label("dy/dt = Q(x, y) =");
                 ui.add(
                     TextEdit::singleline(&mut state.ode_rhs_q)
-                        .desired_width(185.0)
+                        .desired_width(180.0)
                         .font(TextStyle::Monospace),
-                );
-                ui.checkbox(&mut state.ode_show_ensemble, "Show Background Portraits");
-                ui.checkbox(&mut state.ode_show_nullclines, "Nullclines");
-                ui.checkbox(&mut state.ode_show_equilibria, "Equilibria");
-                ui.checkbox(&mut state.ode_show_euler, "Compare Euler");
+                )
+                .on_hover_text("Autonomous y'(t) = Q(x, y) expression in variables x and y");
+                if let (Ok(pe), Ok(qe)) = (Expr::parse(&state.ode_rhs_p), Expr::parse(&state.ode_rhs_q))
+                {
+                    let ode_tex = format!(
+                        r"\frac{{dx}}{{dt}} = {},\quad \frac{{dy}}{{dt}} = {}",
+                        pe.to_latex(),
+                        qe.to_latex()
+                    );
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_ode_system_latex",
+                        &ode_tex,
+                        "Copy planar ODE system as LaTeX",
+                    );
+                }
+                ui.checkbox(&mut state.ode_show_ensemble, "Show Background Portraits")
+                    .on_hover_text("Plot 8 surrounding RK4 phase trajectories across the plane");
+                ui.checkbox(&mut state.ode_show_nullclines, "Nullclines")
+                    .on_hover_text("Draw zero-level contours where dx/dt = 0 and dy/dt = 0");
+                ui.checkbox(&mut state.ode_show_equilibria, "Equilibria")
+                    .on_hover_text("Locate fixed points (x*, y*) via damped Newton-Raphson and classify Jacobians");
+                ui.checkbox(&mut state.ode_show_euler, "Compare Euler")
+                    .on_hover_text("Overlay 1st-order Explicit Euler trajectory against 4th-order RK4");
             });
 
             ui.horizontal_wrapped(|ui| {
-                ui.add(Slider::new(&mut state.ode_seed_x, -3.2..=3.2).text("Initial x(0)"));
-                ui.add(Slider::new(&mut state.ode_seed_y, -3.2..=3.2).text("Initial y(0)"));
-                ui.add(Slider::new(&mut state.ode_dt, 0.01..=0.25).text("Step dt"));
-                ui.add(Slider::new(&mut state.ode_t_max, 2.0..=20.0).text("T_max"));
+                ui.add(Slider::new(&mut state.ode_seed_x, -3.2..=3.2).text("Initial x(0)"))
+                    .on_hover_text("Initial x-coordinate x(0) for forward/backward trajectory integration");
+                ui.add(Slider::new(&mut state.ode_seed_y, -3.2..=3.2).text("Initial y(0)"))
+                    .on_hover_text("Initial y-coordinate y(0) for forward/backward trajectory integration");
+                ui.add(Slider::new(&mut state.ode_dt, 0.01..=0.25).text("Step dt"))
+                    .on_hover_text("Fixed integrator step size dt (smaller dt reduces truncation error)");
+                ui.add(Slider::new(&mut state.ode_t_max, 2.0..=20.0).text("T_max"))
+                    .on_hover_text("Total forward integration horizon T_max");
                 ui.label(
                     RichText::new("(Click anywhere in phase plane to re-seed x(0), y(0))")
                         .small()
@@ -1750,6 +2426,14 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
     let t_max = state.ode_t_max.clamp(2.0, 20.0);
     let steps = ((t_max / dt).round() as usize).clamp(1, 2000);
     let bwd_steps = ((t_max * 0.4 / dt).round() as usize).clamp(1, 800);
+    let [bx_min, bx_max, by_min, by_max] = state.ode_view_bounds;
+    let integ_bound = (bx_min
+        .abs()
+        .max(bx_max.abs())
+        .max(by_min.abs())
+        .max(by_max.abs())
+        * 1.4)
+        .clamp(4.8, 120.0);
 
     let rk4_timed = solve_planar_system_rk4_timed(
         &p_expr,
@@ -1758,7 +2442,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
         state.ode_seed_y,
         dt,
         steps,
-        4.8,
+        integ_bound,
     );
     let euler_timed = if state.ode_show_euler {
         solve_planar_system_euler_timed(
@@ -1768,7 +2452,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
             state.ode_seed_y,
             dt,
             steps,
-            4.8,
+            integ_bound,
         )
     } else {
         Vec::new()
@@ -1780,28 +2464,47 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
         state.ode_seed_y,
         -dt,
         bwd_steps,
-        4.8,
+        integ_bound,
     );
     let p_nullcline = if state.ode_show_nullclines {
-        extract_zero_level_segments(&p_expr, -3.5, 3.5, -3.5, 3.5, 56)
+        extract_zero_level_segments(&p_expr, bx_min, bx_max, by_min, by_max, 56)
     } else {
         Vec::new()
     };
     let q_nullcline = if state.ode_show_nullclines {
-        extract_zero_level_segments(&q_expr, -3.5, 3.5, -3.5, 3.5, 56)
+        extract_zero_level_segments(&q_expr, bx_min, bx_max, by_min, by_max, 56)
     } else {
         Vec::new()
     };
     let equilibria: Vec<EquilibriumPoint> = if state.ode_show_equilibria {
-        find_planar_equilibria(&p_expr, &q_expr, -3.5, 3.5, -3.5, 3.5)
+        find_planar_equilibria(&p_expr, &q_expr, bx_min, bx_max, by_min, by_max)
     } else {
         Vec::new()
     };
 
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Export ODE Curves CSV...")
+            .on_hover_text("Export RK4 (and Euler if enabled) trajectory curves t, x(t), y(t) to CSV")
+            .clicked()
+        {
+            let csv = format_ode_curves_csv(&rk4_timed, &euler_timed);
+            state.export_status_msg = Some(save_csv_via_dialog("calclab_ode_curves.csv", &csv));
+        }
+        if let Some((is_err, msg)) = &state.export_status_msg {
+            let col = if *is_err {
+                theme.err_color()
+            } else {
+                theme.ok_color()
+            };
+            ui.label(RichText::new(msg).small().monospace().color(col));
+        }
+    });
+
     ui.columns(2, |cols| {
         let side = cols[0].available_width().clamp(300.0, 440.0);
 
-        Plot::new("ode_phase_portrait_plot")
+        let mut phase_plot = Plot::new("ode_phase_portrait_plot")
             .width(side)
             .height(side)
             .data_aspect(1.0)
@@ -1812,8 +2515,27 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
             .include_y(3.5)
             .x_axis_label("x")
             .y_axis_label("y")
-            .legend(Legend::default())
-            .show(&mut cols[0], |plot_ui| {
+            .legend(Legend::default());
+        if state.ode_reset_view {
+            phase_plot = phase_plot.reset();
+            state.ode_reset_view = false;
+        }
+        phase_plot.show(&mut cols[0], |plot_ui| {
+                let b = plot_ui.plot_bounds();
+                if b.is_valid() {
+                    let bmin = b.min();
+                    let bmax = b.max();
+                    if bmin[0].is_finite()
+                        && bmax[0].is_finite()
+                        && bmin[1].is_finite()
+                        && bmax[1].is_finite()
+                        && (bmax[0] - bmin[0]) > 1e-4
+                        && (bmax[1] - bmin[1]) > 1e-4
+                    {
+                        state.ode_view_bounds = [bmin[0], bmax[0], bmin[1], bmax[1]];
+                    }
+                }
+
                 if plot_ui.response().clicked() {
                     if let Some(pt) = plot_ui.pointer_coordinate() {
                         state.ode_seed_x = pt.x.clamp(-3.2, 3.2);
@@ -1821,29 +2543,32 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     }
                 }
 
-                // 1. Direction field quiver needles
+                // 1. Adaptive zoom/pan direction field quiver with directional arrowheads
+                let (grid_pts, cell_size) = compute_adaptive_quiver_grid(state.ode_view_bounds, 15);
                 let mut first_q = true;
-                for ix in -7..=7 {
-                    for iy in -7..=7 {
-                        let x = (ix as f64) * 0.45;
-                        let y = (iy as f64) * 0.45;
-                        let u = p_expr.eval_2d(x, y);
-                        let v = q_expr.eval_2d(x, y);
-                        let norm = (u * u + v * v).sqrt();
-                        if norm.is_finite() && norm > 1e-6 {
-                            let len = 0.20;
-                            let ux = u / norm;
-                            let uy = v / norm;
-                            let tip = [x + len * ux, y + len * uy];
-                            let mut shaft = Line::new(vec![[x, y], tip])
-                                .color(Color32::from_rgba_unmultiplied(125, 145, 175, 125))
-                                .width(1.1_f32);
-                            if first_q {
-                                shaft = shaft.name("Slope / Direction Field");
-                                first_q = false;
-                            }
-                            plot_ui.line(shaft);
+                for [x, y] in grid_pts {
+                    let u = p_expr.eval_2d(x, y);
+                    let v = q_expr.eval_2d(x, y);
+                    let norm = u.hypot(v);
+                    if norm.is_finite() && norm > 1e-8 {
+                        let ux = u / norm;
+                        let uy = v / norm;
+                        let (tail, tip, head_pts) =
+                            direction_arrow_geometry(x, y, ux, uy, cell_size);
+                        let arrow_col = Color32::from_rgba_unmultiplied(125, 155, 192, 155);
+                        let mut shaft = Line::new(vec![tail, tip])
+                            .color(arrow_col)
+                            .width(1.15_f32);
+                        if first_q {
+                            shaft = shaft.name("Slope / Direction Field");
+                            first_q = false;
                         }
+                        plot_ui.line(shaft);
+                        plot_ui.line(
+                            Line::new(head_pts.to_vec())
+                                .color(arrow_col)
+                                .width(1.15_f32),
+                        );
                     }
                 }
 
@@ -2077,16 +2802,21 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
             if state.ode_show_equilibria {
                 if equilibria.is_empty() {
                     ui.label(
-                        RichText::new(
-                            "Detected Equilibria in [-3.5, 3.5]^2: None (no P(x*, y*) = Q(x*, y*) = 0 roots found in window)",
-                        )
+                        RichText::new(format!(
+                            "Detected Equilibria in [{:.1}, {:.1}] x [{:.1}, {:.1}]: None (no P(x*, y*) = Q(x*, y*) = 0 roots found in window)",
+                            bx_min, bx_max, by_min, by_max
+                        ))
                         .monospace()
                         .weak(),
                     );
                 } else {
                     ui.label(
                         RichText::new(format!(
-                            "Detected Equilibria in [-3.5, 3.5]^2 ({} found):",
+                            "Detected Equilibria in [{:.1}, {:.1}] x [{:.1}, {:.1}] ({} found):",
+                            bx_min,
+                            bx_max,
+                            by_min,
+                            by_max,
                             equilibria.len()
                         ))
                         .strong()
@@ -2136,12 +2866,42 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
                         ] {
                             ui.selectable_value(&mut state.pde_kind, k, k.label());
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text("Select 1D Heat Diffusion, Standing Wave, or Periodic Advection-Diffusion PDE");
 
                 ui.separator();
-                ui.selectable_value(&mut state.pde_use_custom, false, "Preset Profile");
-                ui.selectable_value(&mut state.pde_use_custom, true, "Custom Expr u(x, 0)");
-                ui.checkbox(&mut state.pde_show_truncation_t0, "Show M-Mode t=0 Sum");
+                ui.selectable_value(&mut state.pde_use_custom, false, "Preset Profile")
+                    .on_hover_text("Use one of the built-in canonical initial profiles u(x, 0)");
+                ui.selectable_value(&mut state.pde_use_custom, true, "Custom Expr u(x, 0)")
+                    .on_hover_text("Project an arbitrary expression u(x, 0) onto M Fourier modes via quadrature");
+                ui.checkbox(&mut state.pde_show_truncation_t0, "Show M-Mode t=0 Sum")
+                    .on_hover_text("Overlay the truncated M-mode Fourier reconstruction at t = 0 to inspect Gibbs ringing");
+
+                let pde_tex = match (state.pde_kind, state.pde_use_custom) {
+                    (PdeKind::HeatDiffusion, false) => r"\frac{\partial u}{\partial t} = \alpha \frac{\partial^{2} u}{\partial x^{2}}",
+                    (PdeKind::WaveEquation, false) => r"\frac{\partial^{2} u}{\partial t^{2}} = c^{2} \frac{\partial^{2} u}{\partial x^{2}}",
+                    (PdeKind::AdvectionDiffusion, false) => r"\frac{\partial u}{\partial t} + v \frac{\partial u}{\partial x} = \alpha \frac{\partial^{2} u}{\partial x^{2}}",
+                    _ => "",
+                };
+                if state.pde_use_custom {
+                    if let Ok(ue) = Expr::parse(&state.pde_custom_expr) {
+                        let ctex = format!("u(x, 0) = {}", ue.to_latex());
+                        math_render::copy_latex_button(
+                            ui,
+                            "lab_pde_custom_latex",
+                            &ctex,
+                            "Copy custom u(x, 0) initial condition as LaTeX",
+                        );
+                    }
+                } else {
+                    math_render::copy_latex_button(
+                        ui,
+                        "lab_pde_eq_latex",
+                        pde_tex,
+                        "Copy governing PDE equation as LaTeX",
+                    );
+                }
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -2157,14 +2917,17 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
                             ] {
                                 ui.selectable_value(&mut state.pde_profile, p, p.label());
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text("Select initial condition profile u(x, 0) across [0, L]");
                 } else {
                     ui.label("u(x, 0) =");
                     ui.add(
                         TextEdit::singleline(&mut state.pde_custom_expr)
                             .desired_width(250.0)
                             .font(TextStyle::Monospace),
-                    );
+                    )
+                    .on_hover_text("Custom initial profile u(x, 0) in terms of x over [0, L]");
                     ui.label(
                         RichText::new("(Fourier quadrature over x in [0, L])")
                             .small()
@@ -2174,18 +2937,27 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
             });
 
             ui.horizontal_wrapped(|ui| {
-                ui.add(Slider::new(&mut state.pde_time, 0.0..=8.0).text("Time t"));
-                ui.checkbox(&mut state.pde_animate, "Animate Evolution");
-                if ui.small_button("Reset t = 0").clicked() {
+                ui.add(Slider::new(&mut state.pde_time, 0.0..=8.0).text("Time t"))
+                    .on_hover_text("Scrub simulation time t (cycles 0..8 when animated)");
+                ui.checkbox(&mut state.pde_animate, "Animate Evolution")
+                    .on_hover_text("Play or pause time-stepping animation (Shortcut: Space)");
+                if ui
+                    .small_button("Reset t = 0")
+                    .on_hover_text("Pause animation and reset time t back to 0.0")
+                    .clicked()
+                {
                     state.pde_time = 0.0;
                     state.pde_animate = false;
                 }
             });
 
             ui.horizontal_wrapped(|ui| {
-                ui.add(Slider::new(&mut state.pde_alpha, 0.0..=0.5).text("Diffusivity alpha"));
-                ui.add(Slider::new(&mut state.pde_speed, 0.2..=2.5).text("Speed c / v"));
-                ui.add(Slider::new(&mut state.pde_modes, 1..=35).text("Fourier Modes M"));
+                ui.add(Slider::new(&mut state.pde_alpha, 0.0..=0.5).text("Diffusivity alpha"))
+                    .on_hover_text("Thermal/viscous diffusivity alpha (governs exp(-alpha * n^2 * t) modal damping)");
+                ui.add(Slider::new(&mut state.pde_speed, 0.2..=2.5).text("Speed c / v"))
+                    .on_hover_text("Wave propagation speed c (Wave) or drift velocity v (Advection-Diffusion)");
+                ui.add(Slider::new(&mut state.pde_modes, 1..=35).text("Fourier Modes M"))
+                    .on_hover_text("Number of truncated Fourier harmonics M included in the spectral Galerkin expansion");
             });
         });
 
@@ -2224,34 +2996,105 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
         }
     };
 
-    Plot::new("pde_1d_evolution_plot")
-        .height(370.0)
-        .include_y(-1.3)
-        .include_y(1.3)
-        .legend(Legend::default())
-        .show(ui, |plot_ui| {
-            plot_ui.line(
-                Line::new(snap.initial_curve)
-                    .color(Color32::from_rgba_unmultiplied(145, 160, 185, 145))
-                    .width(1.6_f32)
-                    .name("Initial Profile u(x, 0)"),
-            );
-            if state.pde_show_truncation_t0 {
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button("Export PDE Curves CSV...")
+            .on_hover_text("Export x, u(x,0), u_M(x,0), and u(x,t) curves to a CSV file")
+            .clicked()
+        {
+            let csv = format_pde_curves_csv(&snap);
+            state.export_status_msg = Some(save_csv_via_dialog("calclab_pde_curves.csv", &csv));
+        }
+        if let Some((is_err, msg)) = &state.export_status_msg {
+            let col = if *is_err {
+                theme.err_color()
+            } else {
+                theme.ok_color()
+            };
+            ui.label(RichText::new(msg).small().monospace().color(col));
+        }
+    });
+
+    let x_axis_lbl = match state.pde_kind {
+        PdeKind::AdvectionDiffusion => "Position x in [0, 2*pi]",
+        _ => "Position x in [0, pi]",
+    };
+
+    ui.columns(2, |cols| {
+        Plot::new("pde_1d_evolution_plot")
+            .height(360.0)
+            .include_y(-1.3)
+            .include_y(1.3)
+            .x_axis_label(x_axis_lbl)
+            .y_axis_label("Amplitude u(x, t)")
+            .legend(Legend::default())
+            .show(&mut cols[0], |plot_ui| {
                 plot_ui.line(
-                    Line::new(snap.reconstructed_t0_curve)
-                        .color(Color32::from_rgb(76, 196, 208))
-                        .width(1.8_f32)
-                        .style(LineStyle::dashed_dense())
-                        .name("M-Mode Truncation u_M(x, 0)"),
+                    Line::new(snap.initial_curve.clone())
+                        .color(Color32::from_rgba_unmultiplied(145, 160, 185, 145))
+                        .width(1.6_f32)
+                        .name("Initial Profile u(x, 0)"),
                 );
-            }
-            plot_ui.line(
-                Line::new(snap.evolved_curve)
-                    .color(Color32::from_rgb(230, 122, 108))
-                    .width(2.6_f32)
-                    .name("Evolved Solution u(x, t)"),
+                if state.pde_show_truncation_t0 {
+                    plot_ui.line(
+                        Line::new(snap.reconstructed_t0_curve.clone())
+                            .color(Color32::from_rgb(76, 196, 208))
+                            .width(1.8_f32)
+                            .style(LineStyle::dashed_dense())
+                            .name("M-Mode Truncation u_M(x, 0)"),
+                    );
+                }
+                plot_ui.line(
+                    Line::new(snap.evolved_curve.clone())
+                        .color(Color32::from_rgb(230, 122, 108))
+                        .width(2.6_f32)
+                        .name("Evolved Solution u(x, t)"),
+                );
+            });
+
+        // Right Plot: Fourier Mode Spectrum Bar Chart
+        let mut init_bars = Vec::with_capacity(snap.fourier_coeffs.len() + 1);
+        let mut evolved_bars = Vec::with_capacity(snap.mode_energies.len() + 1);
+        if matches!(state.pde_kind, PdeKind::AdvectionDiffusion) {
+            let a0_abs = snap.a0.abs();
+            init_bars.push(
+                Bar::new(0.0, a0_abs)
+                    .width(0.66)
+                    .fill(Color32::from_rgba_unmultiplied(88, 166, 236, 110)),
             );
-        });
+            evolved_bars.push(
+                Bar::new(0.0, a0_abs)
+                    .width(0.40)
+                    .fill(Color32::from_rgb(230, 122, 108)),
+            );
+        }
+        for (&(n, an, bn), &(_, amp_t)) in
+            snap.fourier_coeffs.iter().zip(snap.mode_energies.iter())
+        {
+            let amp_0 = an.hypot(bn);
+            init_bars.push(
+                Bar::new(n as f64, amp_0)
+                    .width(0.66)
+                    .fill(Color32::from_rgba_unmultiplied(88, 166, 236, 110)),
+            );
+            evolved_bars.push(
+                Bar::new(n as f64, amp_t)
+                    .width(0.40)
+                    .fill(Color32::from_rgb(230, 122, 108)),
+            );
+        }
+
+        Plot::new("pde_fourier_spectrum_plot")
+            .height(360.0)
+            .include_y(0.0)
+            .x_axis_label("Fourier Mode n")
+            .y_axis_label("Modal Amplitude |c_n|")
+            .legend(Legend::default())
+            .show(&mut cols[1], |plot_ui| {
+                plot_ui.bar_chart(BarChart::new(init_bars).name("Initial |c_n(0)|"));
+                plot_ui.bar_chart(BarChart::new(evolved_bars).name("Active |c_n(t)|"));
+            });
+    });
 
     let top_modes: Vec<String> = snap
         .mode_energies
@@ -2276,11 +3119,16 @@ fn render_pde_sublab(ctx: &Context, ui: &mut Ui, state: &mut LabState, theme: Ac
         .rounding(Rounding::same(6.0))
         .inner_margin(Margin::same(10.0))
         .show(ui, |ui| {
+            let energy_label = match state.pde_kind {
+                PdeKind::WaveEquation => "Total Mechanical Energy Ratio E(t) / E(0)",
+                _ => "L^2 Energy Retention ||u(.,t)||^2 / ||u(.,0)||^2",
+            };
             ui.label(
                 RichText::new(format!(
-                    "Domain [0, {:.2}]  |  t = {:.3}  |  L^2 Energy Retention ||u(.,t)||^2 / ||u(.,0)||^2 = {:.4}  |  t=0 L^2 Truncation Error = {:.4}",
+                    "Domain [0, {:.2}]  |  t = {:.3}  |  {} = {:.4}  |  t=0 L^2 Truncation Error = {:.4}",
                     snap.domain_len,
                     state.pde_time,
+                    energy_label,
                     snap.l2_energy_ratio,
                     snap.l2_truncation_error
                 ))
@@ -2747,7 +3595,7 @@ fn render_prob_stats_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme
                     } else {
                         ui.label(
                             RichText::new(format!(
-                                "OLS Telemetry (n = {}): Add at least 2 points with distinct x-coordinates to fit y_hat = b0 + b1*x (click inside the plot or Reset Sample Points).",
+                                "OLS Telemetry (n = {}): Add at least 3 finite points with distinct x-coordinates to fit y_hat = b0 + b1*x (df = n - 2 >= 1; click inside plot or Reset Sample Points).",
                                 state.stats_points.len()
                             ))
                             .monospace()
@@ -2773,5 +3621,78 @@ mod tests {
         assert_eq!(format_tan_readout(1.0, 0.0), "undefined (asymptote)");
         assert_eq!(format_tan_readout(0.0, 1.0), "0.0000");
         assert_eq!(format_tan_readout((PI / 4.0).sin(), (PI / 4.0).cos()), "1.0000");
+    }
+
+    #[test]
+    fn diverging_ramp_and_auto_contour_levels_scale_cleanly() {
+        let low = diverging_perceptual_color(-1.0);
+        let mid = diverging_perceptual_color(0.0);
+        let high = diverging_perceptual_color(1.0);
+        assert!(low.b() > low.r());
+        assert!(high.r() > high.b());
+        assert!((mid.r() as i16 - mid.b() as i16).abs() < 30);
+
+        let levels = nice_contour_levels(-9.0, 9.0, 11);
+        assert!(levels.len() >= 5);
+        assert!(levels.iter().any(|&v| v.abs() < 1e-12));
+        assert!(nice_contour_levels(2.0, 2.0, 11).is_empty());
+
+        let (p_pt, d_front) = project_3d_surface_point(
+            0.0,
+            -2.0,
+            1.0,
+            0.0,
+            0.3,
+            1.0,
+            egui::pos2(200.0, 200.0),
+            40.0,
+        );
+        let (_, d_back) = project_3d_surface_point(
+            0.0,
+            2.0,
+            1.0,
+            0.0,
+            0.3,
+            1.0,
+            egui::pos2(200.0, 200.0),
+            40.0,
+        );
+        assert!(p_pt.x.is_finite() && p_pt.y.is_finite());
+        assert!(d_front < d_back);
+    }
+
+    #[test]
+    fn ode_adaptive_quiver_and_csv_exporters_format_cleanly() {
+        let (pts, cell) = compute_adaptive_quiver_grid([-1.0, 1.0, -2.0, 2.0], 10);
+        assert_eq!(pts.len(), 100);
+        assert!((cell - 0.2).abs() < 1e-12);
+        let (tail, tip, wings) = direction_arrow_geometry(0.0, 0.0, 1.0, 0.0, cell);
+        assert!(tip[0] > tail[0]);
+        assert!(wings[0][0] < tip[0] && wings[2][0] < tip[0]);
+        assert!(wings[0][1] < tip[1] && wings[2][1] > tip[1]);
+
+        let rk4 = vec![[0.0, 1.0, 0.0], [0.1, 0.99, -0.1]];
+        let euler = vec![[0.0, 1.0, 0.0]];
+        let csv_no_euler = format_ode_curves_csv(&rk4, &[]);
+        assert!(csv_no_euler.starts_with("t,x_rk4,y_rk4\n"));
+        assert_eq!(csv_no_euler.lines().count(), 3);
+
+        let csv_with_euler = format_ode_curves_csv(&rk4, &euler);
+        assert!(csv_with_euler.starts_with("t,x_rk4,y_rk4,x_euler,y_euler\n"));
+        assert_eq!(csv_with_euler.lines().count(), 3);
+        assert!(csv_with_euler.lines().last().unwrap().ends_with(",,"));
+
+        let snap = evaluate_1d_pde(
+            PdeKind::WaveEquation,
+            PdeInitialProfile::TwoModeHarmonic,
+            0.0,
+            1.0,
+            0.5,
+            8,
+            64,
+        );
+        let pde_csv = format_pde_curves_csv(&snap);
+        assert!(pde_csv.starts_with("x,u_initial,u_m_t0,u_evolved\n"));
+        assert_eq!(pde_csv.lines().count(), snap.initial_curve.len() + 1);
     }
 }

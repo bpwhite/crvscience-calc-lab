@@ -190,7 +190,7 @@
         {
           "a0": 0.0,
           "kind": "1D Wave Equation: u_tt = c^2 * u_xx (Fixed Ends [0, pi])",
-          "l2_energy_ratio": 0.9150605350562844,
+          "l2_energy_ratio": 1.0,
           "l2_truncation_error": 1.1029492016419298e-15,
           "modes": 8
         },

@@ -16,7 +16,8 @@
 use crate::curriculum::Stage;
 use crate::domains::ScienceDomain;
 use crate::expr::{
-    check_numeric_equivalence, check_scalar_equivalence, check_vector2_equivalence, Expr,
+    check_numeric_equivalence, check_scalar_equivalence, check_vector2_equivalence, parse_vector2,
+    EvalEnv, Expr,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -386,6 +387,69 @@ pub struct GradeOutcome {
 }
 
 impl GeneratedProblem {
+    /// Validates user answer syntax, allowed variables, and constant finiteness
+    /// against this problem's `AnswerFormat`, returning formatted LaTeX on success.
+    pub fn validate_input_syntax(&self, raw_input: &str) -> Result<String, String> {
+        let trimmed = raw_input.trim();
+        if trimmed.is_empty() {
+            return Err("Expression cannot be empty.".to_string());
+        }
+        match &self.answer {
+            AnswerFormat::Numeric { .. } => {
+                let ast = Expr::parse(trimmed)?;
+                let unk = ast.unknown_vars(&[]);
+                if !unk.is_empty() {
+                    return Err(format!(
+                        "Constant number expected; remove variable(s): {}.",
+                        unk.join(", ")
+                    ));
+                }
+                let val = ast.eval(&EvalEnv::new());
+                if !val.is_finite() {
+                    return Err(
+                        "Expression evaluates to an undefined or non-finite value.".to_string()
+                    );
+                }
+                Ok(ast.to_latex())
+            }
+            AnswerFormat::ScalarExpr { vars, .. } => {
+                let ast = Expr::parse(trimmed)?;
+                let var_refs: Vec<&str> = vars.iter().map(|s| s.as_str()).collect();
+                let unk = ast.unknown_vars(&var_refs);
+                if !unk.is_empty() {
+                    return Err(format!(
+                        "Unexpected variable(s) {}; expected {}.",
+                        unk.join(", "),
+                        vars.join(", ")
+                    ));
+                }
+                Ok(ast.to_latex())
+            }
+            AnswerFormat::Vector2Expr { vars, .. } => {
+                let (p, q) = parse_vector2(trimmed)?;
+                let var_refs: Vec<&str> = vars.iter().map(|s| s.as_str()).collect();
+                let mut unk = p.unknown_vars(&var_refs);
+                for v in q.unknown_vars(&var_refs) {
+                    if !unk.contains(&v) {
+                        unk.push(v);
+                    }
+                }
+                if !unk.is_empty() {
+                    return Err(format!(
+                        "Unexpected variable(s) {}; expected {}.",
+                        unk.join(", "),
+                        vars.join(", ")
+                    ));
+                }
+                Ok(format!(
+                    r"\left\langle {},\, {} \right\rangle",
+                    p.to_latex(),
+                    q.to_latex()
+                ))
+            }
+        }
+    }
+
     pub fn grade(&self, raw_input: &str) -> GradeOutcome {
         let trimmed = raw_input.trim();
         if trimmed.is_empty() {
