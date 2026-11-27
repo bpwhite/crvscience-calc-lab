@@ -16,15 +16,16 @@
 use crate::math_render;
 use crate::theme::AcademicTheme;
 use crate::ui_analytics::{render_analytics, AnalyticsAction, AnalyticsViewState};
-use crate::ui_lab::{render_lab, LabState};
+use crate::ui_lab::{format_ode_curves_csv, format_pde_curves_csv, render_lab, LabMode, LabState, OdePdeSubmode};
 use crate::ui_lesson::render_lesson;
 use crate::ui_menu::{render_main_menu, MainMenuState, MainMenuSubView};
 use crate::ui_notation::{render_notation_studio, NotationStudioState};
 use crate::ui_practice::{render_practice, PracticeAction, PracticeState, ProblemSelectionPool};
 use crate::ui_roadmap::render_roadmap;
 use calc_core::{
-    build_curriculum, AttemptRecord, CurriculumCatalog, LearningRunRecord, ModuleMastery,
-    ModuleSpec, ProfileStore, RunMode, ScienceDomain, Stage, StageScopeFilter,
+    build_curriculum, evaluate_1d_pde, solve_planar_system_euler_timed, solve_planar_system_rk4_timed,
+    AttemptRecord, CurriculumCatalog, Expr, LearningRunRecord, ModuleMastery, ModuleSpec,
+    ProfileStore, RunMode, ScienceDomain, Stage, StageScopeFilter,
 };
 use chrono::Utc;
 use egui::{
@@ -59,6 +60,205 @@ pub enum NavCommand {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteAction {
+    OpenTab(AppTab),
+    OpenLabMode(LabMode),
+    OpenOdeSubmode(OdePdeSubmode),
+    OpenModuleLesson(String),
+    ApplyOdePreset(&'static str),
+    SetOdeIntegrators { show_euler: bool, show_midpoint: bool },
+    RunOdeConvergenceBenchmark,
+    ExportOdeConvergenceJson,
+    ExportOdeConvergenceCsv,
+    ExportProgressJson,
+    ExportOdeCurvesCsv,
+    ExportPdeCurvesCsv,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaletteEntry {
+    pub category: String,
+    pub title: String,
+    pub subtitle: String,
+    pub action: PaletteAction,
+    search_blob: String,
+}
+
+pub fn build_palette_entries(catalog: &CurriculumCatalog) -> Vec<PaletteEntry> {
+    let mut entries = Vec::new();
+    let mut push = |cat: &str, title: String, sub: String, act: PaletteAction| {
+        let blob = format!(
+            "{} {} {}",
+            cat.to_ascii_lowercase(),
+            title.to_ascii_lowercase(),
+            sub.to_ascii_lowercase()
+        );
+        entries.push(PaletteEntry {
+            category: cat.to_string(),
+            title,
+            subtitle: sub,
+            action: act,
+            search_blob: blob,
+        });
+    };
+
+    for (tab, title, sub) in [
+        (AppTab::MainMenu, "Tab: Main Menu Hub (1)", "8 Stage Portals & Learning Overview"),
+        (AppTab::Roadmap, "Tab: 48-Module DAG Map (2)", "Prerequisite dependency graph across 8 stages"),
+        (AppTab::Notation, "Tab: Notation Studio (3)", "Mathematical symbol lexicon and flash drills"),
+        (AppTab::Lesson, "Tab: Concept Lesson (4)", "First-principles notes and worked 2D LaTeX steps"),
+        (AppTab::Practice, "Tab: Runs & Practice Arena (5)", "Guided walkthroughs and timed sprints"),
+        (AppTab::Lab, "Tab: Interactive Visual Lab (6)", "8 mathematical calculus, ODE, PDE, and stats labs"),
+        (AppTab::Analytics, "Tab: Leaderboard & Analytics (7)", "SQLite mastery ledger and progress exports"),
+    ] {
+        push("Tab", title.to_string(), sub.to_string(), PaletteAction::OpenTab(tab));
+    }
+
+    for (mode, title, sub) in [
+        (LabMode::AlgebraExplorer, "Lab: Algebra & Difference Quotients", "Plot f(x), g(x), and secant slopes"),
+        (LabMode::TrigUnitWave, "Lab: Unit Circle & Trig Wave", "Phase-locked circular projection and sinusoids"),
+        (LabMode::SingleVarCalculus, "Lab: Single-Variable Calculus", "Derivatives, Riemann sums, and Taylor polynomials"),
+        (LabMode::LinearAlgebraMap, "Lab: Linear Algebra & Eigen-Systems", "2x2 SVD, determinant, and phase classification"),
+        (LabMode::EpsilonDelta, "Lab: Epsilon-Delta Real Analysis", "Interactive limit neighborhood verifier"),
+        (LabMode::MultivariableField, "Lab: Multivariable Contours & 3D Surface", "Scalar level sets, gradient paths, and 3D mesh"),
+        (LabMode::ProbabilityStatsLab, "Lab: Probability, Bayes & OLS Regression", "PDF/CDF intervals, Bayesian diagnostic, and OLS"),
+    ] {
+        push("Visual Lab", title.to_string(), sub.to_string(), PaletteAction::OpenLabMode(mode));
+    }
+
+    push(
+        "ODE/PDE Lab",
+        "Lab: 2D ODE Systems & Phase Portraits".to_string(),
+        "Phase plane quiver, nullclines, equilibria, RK4/Midpoint/Euler".to_string(),
+        PaletteAction::OpenOdeSubmode(OdePdeSubmode::OdePhasePortrait),
+    );
+    push(
+        "ODE/PDE Lab",
+        "Lab: 1D Spectral Fourier PDEs (Heat, Wave, Advection)".to_string(),
+        "Fourier-Galerkin modal synthesis and energy conservation".to_string(),
+        PaletteAction::OpenOdeSubmode(OdePdeSubmode::PdeEvolution1D),
+    );
+
+    for (preset, title, sub) in [
+        ("damped", "ODE Preset: Damped Harmonic Oscillator", "x' = y, y' = -2.0*x - 0.35*y"),
+        ("pendulum", "ODE Preset: Nonlinear Damped Pendulum", "x' = y, y' = -2.0*sin(x) - 0.15*y"),
+        ("lotka", "ODE Preset: Lotka-Volterra Predator-Prey", "x' = x*(1.2 - 0.8*y), y' = y*(-0.9 + 0.6*x)"),
+        ("vanderpol", "ODE Preset: Van der Pol Limit Cycle", "x' = y, y' = 1.1*(1 - x^2)*y - x"),
+        ("saddle", "ODE Preset: Hyperbolic Saddle Portrait", "x' = x + 0.5*y, y' = 0.5*x - y"),
+    ] {
+        push("ODE Preset", title.to_string(), sub.to_string(), PaletteAction::ApplyOdePreset(preset));
+    }
+
+    push(
+        "Integrator",
+        "Integrator: Compare RK4 + Midpoint (RK2) + Explicit Euler".to_string(),
+        "Overlay all three ODE integrators in phase plane and time series".to_string(),
+        PaletteAction::SetOdeIntegrators { show_euler: true, show_midpoint: true },
+    );
+    push(
+        "Integrator",
+        "Integrator: RK4 + Midpoint (RK2) Only".to_string(),
+        "Show 4th-order RK4 and 2nd-order Midpoint trajectories".to_string(),
+        PaletteAction::SetOdeIntegrators { show_euler: false, show_midpoint: true },
+    );
+    push(
+        "Integrator",
+        "Integrator: Classical RK4 Only".to_string(),
+        "Display pure 4th-order Runge-Kutta trajectory".to_string(),
+        PaletteAction::SetOdeIntegrators { show_euler: false, show_midpoint: false },
+    );
+    push(
+        "Integrator",
+        "Benchmark: Run ODE Step-Halving Convergence Comparator".to_string(),
+        "Compare empirical convergence orders for Euler, Midpoint (RK2), and RK4".to_string(),
+        PaletteAction::RunOdeConvergenceBenchmark,
+    );
+
+    push(
+        "Export",
+        "Export: ODE Convergence Benchmark (.json)".to_string(),
+        "Write Euler vs Midpoint/RK2 vs RK4 convergence table to JSON".to_string(),
+        PaletteAction::ExportOdeConvergenceJson,
+    );
+    push(
+        "Export",
+        "Export: ODE Convergence Benchmark (.csv)".to_string(),
+        "Write Euler vs Midpoint/RK2 vs RK4 convergence table to CSV".to_string(),
+        PaletteAction::ExportOdeConvergenceCsv,
+    );
+    push(
+        "Export",
+        "Export: ODE Trajectory Curves (.csv)".to_string(),
+        "Save t, x(t), y(t) RK4/Euler curves to CSV".to_string(),
+        PaletteAction::ExportOdeCurvesCsv,
+    );
+    push(
+        "Export",
+        "Export: 1D Spectral PDE Curves (.csv)".to_string(),
+        "Save spatial u(x, 0) and evolved u(x, t) curves to CSV".to_string(),
+        PaletteAction::ExportPdeCurvesCsv,
+    );
+    push(
+        "Export",
+        "Export: Progress & Mastery Snapshot (.json) (Ctrl+S)".to_string(),
+        "Write SQLite profile mastery and run history to JSON".to_string(),
+        PaletteAction::ExportProgressJson,
+    );
+
+    for spec in &catalog.modules {
+        push(
+            "Module",
+            format!("{} — {}", spec.code, spec.title),
+            format!("{} | {}", spec.stage.title(), spec.subtitle),
+            PaletteAction::OpenModuleLesson(spec.id.to_string()),
+        );
+    }
+
+    entries
+}
+
+pub fn search_palette_entries<'a>(
+    entries: &'a [PaletteEntry],
+    query: &str,
+    limit: usize,
+) -> Vec<&'a PaletteEntry> {
+    let trimmed = query.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return entries.iter().take(limit.max(1)).collect();
+    }
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let mut scored: Vec<(i32, &PaletteEntry)> = Vec::new();
+    for entry in entries {
+        let mut matched = true;
+        let mut score = 0_i32;
+        let title_lc = entry.title.to_ascii_lowercase();
+        for &tk in &tokens {
+            if let Some(pos) = entry.search_blob.find(tk) {
+                if title_lc.starts_with(tk) {
+                    score += 35;
+                } else if pos < 18 {
+                    score += 18;
+                } else {
+                    score += 6;
+                }
+            } else {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            scored.push((score, entry));
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored
+        .into_iter()
+        .take(limit.max(1))
+        .map(|(_, e)| e)
+        .collect()
+}
+
 pub struct CalcLabApp {
     pub catalog: CurriculumCatalog,
     pub store: ProfileStore,
@@ -80,6 +280,10 @@ pub struct CalcLabApp {
     pub sidebar_search: String,
     pub focus_sidebar_search: bool,
     pub show_about: bool,
+    pub cmd_palette_open: bool,
+    pub cmd_query: String,
+    pub cmd_selected_idx: usize,
+    pub cmd_entries: Vec<PaletteEntry>,
     pub db_error_banner: Option<String>,
 }
 
@@ -137,6 +341,7 @@ impl CalcLabApp {
         if let Some(first) = catalog.get(&initial_id) {
             lab.apply_preset(&first.lab_preset);
         }
+        let cmd_entries = build_palette_entries(&catalog);
 
         Self {
             catalog,
@@ -159,6 +364,10 @@ impl CalcLabApp {
             sidebar_search: String::new(),
             focus_sidebar_search: false,
             show_about: false,
+            cmd_palette_open: false,
+            cmd_query: String::new(),
+            cmd_selected_idx: 0,
+            cmd_entries,
             db_error_banner,
         }
     }
@@ -224,6 +433,174 @@ impl CalcLabApp {
 }
 
 impl CalcLabApp {
+    pub(crate) fn execute_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::OpenTab(tab) => {
+                self.apply_nav_command(NavCommand::OpenTab(tab));
+            }
+            PaletteAction::OpenLabMode(mode) => {
+                self.lab.mode = mode;
+                self.active_tab = AppTab::Lab;
+            }
+            PaletteAction::OpenOdeSubmode(submode) => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = submode;
+                self.active_tab = AppTab::Lab;
+            }
+            PaletteAction::OpenModuleLesson(module_id) => {
+                self.apply_nav_command(NavCommand::OpenModule {
+                    module_id,
+                    tab: AppTab::Lesson,
+                });
+            }
+            PaletteAction::ApplyOdePreset(preset) => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = OdePdeSubmode::OdePhasePortrait;
+                match preset {
+                    "pendulum" => {
+                        self.lab.ode_rhs_p = "y".to_string();
+                        self.lab.ode_rhs_q = "-2.0*sin(x) - 0.15*y".to_string();
+                        self.lab.ode_seed_x = 2.4;
+                        self.lab.ode_seed_y = 0.2;
+                    }
+                    "lotka" => {
+                        self.lab.ode_rhs_p = "x * (1.2 - 0.8*y)".to_string();
+                        self.lab.ode_rhs_q = "y * (-0.9 + 0.6*x)".to_string();
+                        self.lab.ode_seed_x = 1.8;
+                        self.lab.ode_seed_y = 0.8;
+                    }
+                    "vanderpol" => {
+                        self.lab.ode_rhs_p = "y".to_string();
+                        self.lab.ode_rhs_q = "1.1*(1 - x^2)*y - x".to_string();
+                        self.lab.ode_seed_x = 0.35;
+                        self.lab.ode_seed_y = 0.25;
+                    }
+                    "saddle" => {
+                        self.lab.ode_rhs_p = "x + 0.5*y".to_string();
+                        self.lab.ode_rhs_q = "0.5*x - y".to_string();
+                        self.lab.ode_seed_x = 0.4;
+                        self.lab.ode_seed_y = 2.2;
+                    }
+                    _ => {
+                        self.lab.ode_rhs_p = "y".to_string();
+                        self.lab.ode_rhs_q = "-2.0*x - 0.35*y".to_string();
+                        self.lab.ode_seed_x = 2.2;
+                        self.lab.ode_seed_y = 0.0;
+                    }
+                }
+                self.active_tab = AppTab::Lab;
+            }
+            PaletteAction::SetOdeIntegrators {
+                show_euler,
+                show_midpoint,
+            } => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = OdePdeSubmode::OdePhasePortrait;
+                self.lab.ode_show_euler = show_euler;
+                self.lab.ode_show_midpoint = show_midpoint;
+                self.active_tab = AppTab::Lab;
+            }
+            PaletteAction::RunOdeConvergenceBenchmark => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = OdePdeSubmode::OdePhasePortrait;
+                self.active_tab = AppTab::Lab;
+                match self.lab.run_current_ode_benchmark() {
+                    Ok(()) => {
+                        self.lab.export_status_msg = Some((
+                            false,
+                            "Computed Euler vs Midpoint/RK2 vs RK4 convergence orders.".to_string(),
+                        ));
+                    }
+                    Err(e) => {
+                        self.lab.export_status_msg = Some((true, format!("Benchmark error: {e}")));
+                    }
+                }
+            }
+            PaletteAction::ExportOdeConvergenceJson => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = OdePdeSubmode::OdePhasePortrait;
+                self.active_tab = AppTab::Lab;
+                self.lab.export_ode_benchmark_dialog(false);
+            }
+            PaletteAction::ExportOdeConvergenceCsv => {
+                self.lab.mode = LabMode::OdePdeLab;
+                self.lab.ode_submode = OdePdeSubmode::OdePhasePortrait;
+                self.active_tab = AppTab::Lab;
+                self.lab.export_ode_benchmark_dialog(true);
+            }
+            PaletteAction::ExportProgressJson => {
+                self.export_progress_snapshot_dialog();
+            }
+            PaletteAction::ExportOdeCurvesCsv => {
+                if let (Ok(pe), Ok(qe)) = (
+                    Expr::parse(&self.lab.ode_rhs_p),
+                    Expr::parse(&self.lab.ode_rhs_q),
+                ) {
+                    let dt = self.lab.ode_dt.clamp(0.01, 0.25);
+                    let t_max = self.lab.ode_t_max.clamp(2.0, 20.0);
+                    let steps = ((t_max / dt).round() as usize).clamp(1, 2000);
+                    let rk4 = solve_planar_system_rk4_timed(
+                        &pe,
+                        &qe,
+                        self.lab.ode_seed_x,
+                        self.lab.ode_seed_y,
+                        dt,
+                        steps,
+                        20.0,
+                    );
+                    let euler = if self.lab.ode_show_euler {
+                        solve_planar_system_euler_timed(
+                            &pe,
+                            &qe,
+                            self.lab.ode_seed_x,
+                            self.lab.ode_seed_y,
+                            dt,
+                            steps,
+                            20.0,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    let csv = format_ode_curves_csv(&rk4, &euler);
+                    if let Some(p) = rfd::FileDialog::new()
+                        .set_file_name("calclab_ode_curves.csv")
+                        .add_filter("CSV Data", &["csv"])
+                        .save_file()
+                    {
+                        let res = match fs::write(&p, csv) {
+                            Ok(()) => (false, format!("Exported ODE CSV to {}", p.display())),
+                            Err(e) => (true, format!("CSV write error: {e}")),
+                        };
+                        self.lab.export_status_msg = Some(res);
+                    }
+                }
+            }
+            PaletteAction::ExportPdeCurvesCsv => {
+                let snap = evaluate_1d_pde(
+                    self.lab.pde_kind,
+                    self.lab.pde_profile,
+                    self.lab.pde_alpha,
+                    self.lab.pde_speed,
+                    self.lab.pde_time,
+                    self.lab.pde_modes,
+                    120,
+                );
+                let csv = format_pde_curves_csv(&snap);
+                if let Some(p) = rfd::FileDialog::new()
+                    .set_file_name("calclab_pde_curves.csv")
+                    .add_filter("CSV Data", &["csv"])
+                    .save_file()
+                {
+                    let res = match fs::write(&p, csv) {
+                        Ok(()) => (false, format!("Exported PDE CSV to {}", p.display())),
+                        Err(e) => (true, format!("CSV write error: {e}")),
+                    };
+                    self.lab.export_status_msg = Some(res);
+                }
+            }
+        }
+    }
+
     pub(crate) fn export_progress_snapshot_dialog(&mut self) {
         match self.store.export_json(&self.catalog) {
             Ok(json) => {
@@ -266,7 +643,7 @@ impl CalcLabApp {
         }
 
         let wants_kb = ctx.wants_keyboard_input();
-        let (f1_pressed, esc_pressed, save_pressed, find_pressed, space_pressed, tab_hotkey) =
+        let (f1_pressed, esc_pressed, save_pressed, find_pressed, palette_pressed, space_pressed, tab_hotkey) =
             ctx.input(|i| {
                 let cmd_or_ctrl = i.modifiers.command || i.modifiers.ctrl;
                 let no_mods = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
@@ -296,6 +673,7 @@ impl CalcLabApp {
                     i.key_pressed(Key::Escape),
                     cmd_or_ctrl && i.key_pressed(Key::S),
                     cmd_or_ctrl && i.key_pressed(Key::F),
+                    cmd_or_ctrl && i.key_pressed(Key::K),
                     no_mods && i.key_pressed(Key::Space),
                     tab_key,
                 )
@@ -303,8 +681,15 @@ impl CalcLabApp {
         if f1_pressed {
             self.show_about = !self.show_about;
         }
+        if palette_pressed {
+            self.cmd_palette_open = !self.cmd_palette_open;
+            self.cmd_query.clear();
+            self.cmd_selected_idx = 0;
+        }
         if esc_pressed {
-            if self.show_about {
+            if self.cmd_palette_open {
+                self.cmd_palette_open = false;
+            } else if self.show_about {
                 self.show_about = false;
             } else if self.analytics_view.confirm_reset {
                 self.analytics_view.confirm_reset = false;
@@ -406,6 +791,16 @@ impl CalcLabApp {
                         .clicked()
                     {
                         self.show_about = true;
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Jump (Ctrl+K)")
+                        .on_hover_text("Open Fuzzy Command Palette across tabs, ODE/PDE presets, integrators, and exports (Ctrl+K)")
+                        .clicked()
+                    {
+                        self.cmd_palette_open = !self.cmd_palette_open;
+                        self.cmd_query.clear();
+                        self.cmd_selected_idx = 0;
                     }
                     ui.separator();
                     let theme_btn = match self.theme {
@@ -782,7 +1177,7 @@ impl CalcLabApp {
                     ui.label("48-module mastery DAG across 8 stages, 2D LaTeX walkthroughs, ODE phase portraits, and 1D spectral PDEs.");
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Shortcuts: 1-7 Tabs | Ctrl+F Search | Space PDE Play/Pause | Ctrl+S Export | F1 About | Esc Back")
+                        RichText::new("Shortcuts: 1-7 Tabs | Ctrl+K Palette | Ctrl+F Search | Space PDE Play/Pause | Ctrl+S Export | F1 About | Esc Back")
                             .small()
                             .weak(),
                     );
@@ -791,6 +1186,55 @@ impl CalcLabApp {
                     ui.hyperlink_to("CRV Science Apps Hub (https://crvscience.com/apps)", "https://crvscience.com/apps");
                 });
             self.show_about = open;
+        }
+
+        if self.cmd_palette_open {
+            let mut open = self.cmd_palette_open;
+            let mut chosen: Option<PaletteAction> = None;
+            egui::Window::new("Quick-Jump Command Palette (Ctrl+K)")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(500.0)
+                .anchor(egui::Align2::CENTER_TOP, egui::Vec2::new(0.0, 46.0))
+                .show(ctx, |ui| {
+                    let resp = ui.text_edit_singleline(&mut self.cmd_query);
+                    if resp.changed() {
+                        self.cmd_selected_idx = 0;
+                    }
+                    resp.request_focus();
+                    let hits = search_palette_entries(&self.cmd_entries, &self.cmd_query, 18);
+                    if !hits.is_empty() {
+                        self.cmd_selected_idx = self.cmd_selected_idx.min(hits.len() - 1);
+                        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                            self.cmd_selected_idx = (self.cmd_selected_idx + 1).min(hits.len() - 1);
+                        }
+                        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                            self.cmd_selected_idx = self.cmd_selected_idx.saturating_sub(1);
+                        }
+                        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                            chosen = Some(hits[self.cmd_selected_idx].action.clone());
+                        }
+                    } else {
+                        self.cmd_selected_idx = 0;
+                    }
+                    ui.small("Use Up/Down to select, Enter to execute, Esc to close.");
+                    ui.separator();
+                    ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for (idx, entry) in hits.iter().enumerate() {
+                            let is_sel = idx == self.cmd_selected_idx;
+                            let lbl = format!("[{}] {} — {}", entry.category, entry.title, entry.subtitle);
+                            if ui.selectable_label(is_sel, lbl).clicked() {
+                                chosen = Some(entry.action.clone());
+                            }
+                        }
+                    });
+                });
+            self.cmd_palette_open = open;
+            if let Some(act) = chosen {
+                self.cmd_palette_open = false;
+                self.execute_palette_action(act);
+            }
         }
 
         if let Some(cmd) = pending_nav {
@@ -966,5 +1410,43 @@ mod tests {
         assert!(!app.lab.pde_animate);
         step_key(&mut app, &ctx, Key::Num1);
         assert_eq!(app.active_tab, AppTab::Lab);
+    }
+
+    #[test]
+    fn headless_ctrl_k_palette_searches_switches_labs_and_runs_ode_benchmark() {
+        let ctx = Context::default();
+        let mut app = CalcLabApp::new_with_mode(true);
+        step_frame(&mut app, &ctx);
+
+        // Ctrl+K opens palette and focuses search input
+        step_key_with_mods(&mut app, &ctx, Key::K, egui::Modifiers::CTRL);
+        assert!(app.cmd_palette_open);
+        assert!(ctx.wants_keyboard_input());
+
+        // Single-key tab hotkey must be blocked while palette is open
+        step_key(&mut app, &ctx, Key::Num6);
+        assert_eq!(app.active_tab, AppTab::MainMenu);
+
+        // Escape closes palette first without leaving current tab
+        step_key(&mut app, &ctx, Key::Escape);
+        assert!(!app.cmd_palette_open);
+
+        // Palette search & execution for ODE preset and convergence benchmark
+        let hits = search_palette_entries(&app.cmd_entries, "lotka", 5);
+        assert!(hits
+            .iter()
+            .any(|e| matches!(e.action, PaletteAction::ApplyOdePreset("lotka"))));
+        app.execute_palette_action(PaletteAction::ApplyOdePreset("lotka"));
+        assert_eq!(app.active_tab, AppTab::Lab);
+        assert_eq!(app.lab.mode, LabMode::OdePdeLab);
+
+        app.execute_palette_action(PaletteAction::RunOdeConvergenceBenchmark);
+        let bench = app
+            .lab
+            .ode_convergence_bench
+            .as_ref()
+            .expect("ODE benchmark computed via palette");
+        assert_eq!(bench.rows.len(), 12);
+        assert!(bench.mean_order_rk4 > 3.5);
     }
 }

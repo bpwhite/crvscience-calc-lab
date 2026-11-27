@@ -2,7 +2,7 @@
 
 ![Calc-Lab Headless Workbench](validation/headless_screenshot.png)
 
-A standalone native Rust desktop application (`eframe` / `egui` + `egui_plot` + bundled `rusqlite`) featuring a **Main Menu Hub**, **8 Stage Portals with Focused 6-Module Drill-Down Views**, an interactive **Notation Studio**, **Timed Game Modes** (`Quick Blitz 90s`, `Medium 5m`, `Infinite`), **Step-by-Step Visual Method Walkthroughs**, **6 Scientific Domain Lenses**, and **8 Interactive Mathematical Laboratories** across **48 modules**.
+A standalone `#![forbid(unsafe_code)]`-core (`#![deny(unsafe_code)]` desktop shell outside localized Windows console attach) native Rust desktop application (`eframe` / `egui` + `egui_plot` + bundled `rusqlite`) featuring a **Main Menu Hub**, **8 Stage Portals with Focused 6-Module Drill-Down Views**, an interactive **Notation Studio**, **Timed Game Modes** (`Quick Blitz 90s`, `Medium 5m`, `Infinite`), **Step-by-Step Visual Method Walkthroughs**, **6 Scientific Domain Lenses**, and **8 Interactive Mathematical Laboratories** across **48 modules**.
 
 - **User Documentation**: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
 - **Numerical & Scientific Methods**: [`docs/SCIENTIFIC_METHODS.md`](docs/SCIENTIFIC_METHODS.md)
@@ -31,6 +31,7 @@ cargo run --release -p calc-app
 | :--- | :--- | :--- |
 | `1` – `7` | Global *(when not typing in a text field)* | Switch across the 7 tabs: `1` Main Menu, `2` DAG Map, `3` Notation Studio, `4` Lesson, `5` Runs & Arena, `6` Visual Lab, `7` Leaderboard |
 | `Space` | Visual Lab → 1D Spectral PDEs *(when not typing)* | Play / pause 1D PDE time evolution animation |
+| `Ctrl+K` / `Cmd+K` | Global | Open Fuzzy Command Palette (jump across tabs, labs, ODE/PDE presets, integrators, exports) |
 | `Ctrl+F` / `Cmd+F` | Global | Open the 48-module Curriculum Index sidebar and focus module search |
 | `Ctrl+S` / `Cmd+S` | Global | Export SQLite progress & run history snapshot to JSON |
 | `Enter` | Runs & Arena / Notation Flash Drill | Submit answer (1st press); advance to next problem in Learning Mode (2nd press) |
@@ -51,6 +52,7 @@ cargo run --release -p calc-app
 | `-h`, `--help` | Print CLI usage instructions and exit |
 | `-V`, `--version` | Print `calc-app` version and exit |
 | `--self-test` | Run headless verification of 48 modules × 6 domains (`288` problems), Notation Studio, symbolic differentiation, ODE/PDE/Matrix/Stats solvers, and SQLite ledger |
+| `--ode-benchmark` | Run Euler vs. Midpoint (RK2) vs. RK4 step-halving convergence benchmark (`--preset <harmonic\|damped\|lotka\|vanderpol>`, `--format <table\|json\|csv>`, `--out <PATH>`) |
 | `--screenshot <PNG>` | Render a `1600x1000` offscreen RGBA PNG via `wgpu` and exit |
 | `--screenshot-view <1\|2\|3>`, `--view <1\|2\|3>` | Select offscreen view for `--screenshot`: `1` = Practice Walkthrough, `2` = ODE Phase Lab, `3` = Notation Studio |
 
@@ -63,7 +65,7 @@ cargo run --release -p calc-app
   - Recursive-descent expression parser with symbolic differentiation, algebraic simplification, LaTeX formatting, and live syntax/variable validation (`validate_input_syntax`).
   - Adaptive Simpson quadrature with strict pole/domain `NaN` propagation (`adaptive_simpson`), Riemann & Darboux sums, and Taylor series expansion.
   - Scale-invariant $2 \times 2$ matrix diagnostics (`Mat2`): direct singular-value decomposition via $(a_{11} \pm a_{22})^2 + (a_{21} \mp a_{12})^2$ avoiding $A^T A$ condition-number squaring, plus Frobenius-scaled rank and spectral phase classification.
-  - Classical 4th-order Runge-Kutta (`RK4`) vs Explicit Euler ODE integrators, multi-start damped Newton-Raphson planar equilibria detection, and marching-squares nullclines.
+  - Classical 4th-order Runge-Kutta (`RK4`), 2nd-order Midpoint (`RK2`), and Explicit Euler ODE integrators with step-halving empirical convergence-order benchmarking (`JSON`/`CSV` export), multi-start damped Newton-Raphson planar equilibria detection, and marching-squares nullclines.
   - 1D Spectral Fourier-Galerkin PDE solver (`HeatDiffusion`, `WaveEquation` with full displacement + kinetic mechanical energy conservation, and periodic `AdvectionDiffusion`) with live mode-spectrum visualization.
   - $O(1)$ Lanczos $\ln\Gamma(z)$ / $\ln(k!)$ estimator (`ln_gamma`, `ln_factorial`), Normal/Exponential/Poisson/Binomial probability evaluators, Bayesian binary updating, and filtered OLS linear regression (`n >= 3`, $\text{df} = n - 2 \ge 1$).
 
@@ -71,7 +73,7 @@ cargo run --release -p calc-app
 
 ## Validation Metrics
 
-Verified deterministically by `cargo test --workspace` and logged in [`validation/calc_lab_validation_summary.json`](validation/calc_lab_validation_summary.json) & [`validation/rk4_convergence_table.csv`](validation/rk4_convergence_table.csv):
+Verified deterministically by `cargo test --workspace --release` (`47 passed; 0 failed`: `calc-core` `20` unit + `4` validation, `calc-app` `23` unit) and logged in [`validation/calc_lab_validation_summary.json`](validation/calc_lab_validation_summary.json) & [`validation/rk4_convergence_table.csv`](validation/rk4_convergence_table.csv):
 
 | Verification Suite | Key Measured Metric | Value |
 | :--- | :--- | :--- |

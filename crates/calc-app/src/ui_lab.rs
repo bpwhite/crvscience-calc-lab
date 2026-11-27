@@ -16,12 +16,13 @@
 use crate::math_render;
 use crate::theme::AcademicTheme;
 use calc_core::{
-    binomial_pmf, compute_bayes_binary, evaluate_1d_pde, evaluate_1d_pde_custom, evaluate_field_2d,
-    exponential_cdf, exponential_pdf, extract_zero_level_segments, find_planar_equilibria,
-    fit_ols_linear, normal_cdf, normal_pdf, poisson_pmf, riemann_sum,
-    solve_planar_system_euler_timed, solve_planar_system_rk4, solve_planar_system_rk4_timed,
-    taylor_polynomial_at, DistributionKind, EigenSpectrum2D, EquilibriumPoint, Expr, LabPreset,
-    Mat2, PdeInitialProfile, PdeKind, PdeSnapshot, RiemannMethod,
+    benchmark_ode_integrator_convergence, binomial_pmf, compute_bayes_binary, evaluate_1d_pde,
+    evaluate_1d_pde_custom, evaluate_field_2d, exponential_cdf, exponential_pdf,
+    extract_zero_level_segments, find_planar_equilibria, fit_ols_linear, normal_cdf, normal_pdf,
+    poisson_pmf, riemann_sum, solve_planar_system_euler_timed, solve_planar_system_midpoint_timed,
+    solve_planar_system_rk4, solve_planar_system_rk4_timed, taylor_polynomial_at,
+    DistributionKind, EigenSpectrum2D, EquilibriumPoint, Expr, LabPreset, Mat2,
+    OdeConvergenceBenchmark, PdeInitialProfile, PdeKind, PdeSnapshot, RiemannMethod,
 };
 use egui::{
     Color32, ComboBox, Context, Frame, Margin, RichText, Rounding, Slider, Stroke, TextEdit,
@@ -120,6 +121,8 @@ pub struct LabState {
     pub ode_show_nullclines: bool,
     pub ode_show_equilibria: bool,
     pub ode_show_euler: bool,
+    pub ode_show_midpoint: bool,
+    pub ode_convergence_bench: Option<OdeConvergenceBenchmark>,
     pub ode_view_bounds: [f64; 4],
     pub ode_reset_view: bool,
     pub pde_kind: PdeKind,
@@ -203,6 +206,8 @@ impl Default for LabState {
             ode_show_nullclines: true,
             ode_show_equilibria: true,
             ode_show_euler: true,
+            ode_show_midpoint: true,
+            ode_convergence_bench: None,
             ode_view_bounds: [-3.5, 3.5, -3.5, 3.5],
             ode_reset_view: false,
             pde_kind: PdeKind::HeatDiffusion,
@@ -493,14 +498,14 @@ fn render_algebra_lab(ui: &mut Ui, state: &mut LabState, theme: AcademicTheme) {
             });
         });
 
-    let f_parsed = Expr::parse(&state.alg_primary);
+    let f_expr = match Expr::parse(&state.alg_primary) {
+        Ok(e) => e,
+        Err(e) => {
+            ui.label(RichText::new(format!("f(x) syntax error: {}", e)).color(theme.err_color()));
+            return;
+        }
+    };
     let g_parsed = Expr::parse(&state.alg_secondary);
-
-    if let Err(e) = &f_parsed {
-        ui.label(RichText::new(format!("f(x) syntax error: {}", e)).color(theme.err_color()));
-        return;
-    }
-    let f_expr = f_parsed.unwrap();
 
     Plot::new("algebra_explorer_plot")
         .height(380.0)
@@ -2245,18 +2250,76 @@ pub(crate) fn format_pde_curves_csv(snap: &PdeSnapshot) -> String {
     csv
 }
 
-fn save_csv_via_dialog(default_name: &str, csv_content: &str) -> (bool, String) {
+fn save_text_via_dialog(
+    default_name: &str,
+    filter_label: &str,
+    ext: &str,
+    content: &str,
+) -> (bool, String) {
     if let Some(out_path) = rfd::FileDialog::new()
         .set_file_name(default_name)
-        .add_filter("CSV Data", &["csv"])
+        .add_filter(filter_label, &[ext])
         .save_file()
     {
-        match std::fs::write(&out_path, csv_content) {
-            Ok(()) => (false, format!("Exported CSV to {}", out_path.display())),
-            Err(e) => (true, format!("CSV export write error: {}", e)),
+        match std::fs::write(&out_path, content) {
+            Ok(()) => (false, format!("Exported {} to {}", ext.to_uppercase(), out_path.display())),
+            Err(e) => (true, format!("{} export write error: {}", ext.to_uppercase(), e)),
         }
     } else {
-        (false, "CSV export cancelled.".to_string())
+        (false, format!("{} export cancelled.", ext.to_uppercase()))
+    }
+}
+
+fn save_csv_via_dialog(default_name: &str, csv_content: &str) -> (bool, String) {
+    save_text_via_dialog(default_name, "CSV Data", "csv", csv_content)
+}
+
+impl LabState {
+    pub fn run_current_ode_benchmark(&mut self) -> Result<(), String> {
+        let p_expr = Expr::parse(&self.ode_rhs_p)?;
+        let q_expr = Expr::parse(&self.ode_rhs_q)?;
+        let label = format!("dx/dt = {}, dy/dt = {}", self.ode_rhs_p, self.ode_rhs_q);
+        let bench = benchmark_ode_integrator_convergence(
+            &p_expr,
+            &q_expr,
+            &label,
+            self.ode_seed_x,
+            self.ode_seed_y,
+            2.0,
+        );
+        self.ode_convergence_bench = Some(bench);
+        Ok(())
+    }
+
+    pub fn export_ode_benchmark_dialog(&mut self, is_csv: bool) {
+        if self.ode_convergence_bench.is_none() {
+            if let Err(e) = self.run_current_ode_benchmark() {
+                self.export_status_msg = Some((true, format!("Benchmark failed: {e}")));
+                return;
+            }
+        }
+        let Some(bench) = &self.ode_convergence_bench else {
+            return;
+        };
+        let res = if is_csv {
+            save_text_via_dialog(
+                "calclab_ode_convergence.csv",
+                "CSV Table",
+                "csv",
+                &bench.to_csv(),
+            )
+        } else {
+            match bench.to_json_pretty() {
+                Ok(json) => save_text_via_dialog(
+                    "calclab_ode_convergence.json",
+                    "JSON Benchmark",
+                    "json",
+                    &json,
+                ),
+                Err(e) => (true, format!("JSON serialize error: {e}")),
+            }
+        };
+        self.export_status_msg = Some(res);
     }
 }
 
@@ -2366,6 +2429,8 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     .on_hover_text("Locate fixed points (x*, y*) via damped Newton-Raphson and classify Jacobians");
                 ui.checkbox(&mut state.ode_show_euler, "Compare Euler")
                     .on_hover_text("Overlay 1st-order Explicit Euler trajectory against 4th-order RK4");
+                ui.checkbox(&mut state.ode_show_midpoint, "Compare Midpoint (RK2)")
+                    .on_hover_text("Overlay 2nd-order Midpoint (RK2) trajectory");
             });
 
             ui.horizontal_wrapped(|ui| {
@@ -2457,6 +2522,19 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
     } else {
         Vec::new()
     };
+    let midpoint_timed = if state.ode_show_midpoint {
+        solve_planar_system_midpoint_timed(
+            &p_expr,
+            &q_expr,
+            state.ode_seed_x,
+            state.ode_seed_y,
+            dt,
+            steps,
+            integ_bound,
+        )
+    } else {
+        Vec::new()
+    };
     let bwd = solve_planar_system_rk4(
         &p_expr,
         &q_expr,
@@ -2490,6 +2568,37 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
         {
             let csv = format_ode_curves_csv(&rk4_timed, &euler_timed);
             state.export_status_msg = Some(save_csv_via_dialog("calclab_ode_curves.csv", &csv));
+        }
+        if ui
+            .button("Run Convergence Benchmark (Euler vs RK2 vs RK4)")
+            .on_hover_text("Compare step-halving empirical convergence orders across Euler, Midpoint (RK2), and RK4")
+            .clicked()
+        {
+            match state.run_current_ode_benchmark() {
+                Ok(()) => {
+                    state.export_status_msg = Some((
+                        false,
+                        "Computed step-halving convergence orders for Euler, Midpoint (RK2), and RK4.".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    state.export_status_msg = Some((true, format!("Benchmark error: {e}")));
+                }
+            }
+        }
+        if ui
+            .button("Export Benchmark JSON...")
+            .on_hover_text("Export ODE step-halving convergence benchmark to JSON")
+            .clicked()
+        {
+            state.export_ode_benchmark_dialog(false);
+        }
+        if ui
+            .button("Export Benchmark CSV...")
+            .on_hover_text("Export ODE step-halving convergence benchmark to CSV")
+            .clicked()
+        {
+            state.export_ode_benchmark_dialog(true);
         }
         if let Some((is_err, msg)) = &state.export_status_msg {
             let col = if *is_err {
@@ -2630,7 +2739,7 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                     }
                 }
 
-                // 4. Explicit Euler comparison trajectory
+                // 4. Explicit Euler & Midpoint (RK2) comparison trajectories
                 if state.ode_show_euler && euler_timed.len() >= 2 {
                     let euler_xy: Vec<[f64; 2]> =
                         euler_timed.iter().map(|pt| [pt[1], pt[2]]).collect();
@@ -2640,6 +2749,17 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                             .width(1.8_f32)
                             .style(LineStyle::dashed_loose())
                             .name("Explicit Euler (t >= 0)"),
+                    );
+                }
+                if state.ode_show_midpoint && midpoint_timed.len() >= 2 {
+                    let mid_xy: Vec<[f64; 2]> =
+                        midpoint_timed.iter().map(|pt| [pt[1], pt[2]]).collect();
+                    plot_ui.line(
+                        Line::new(mid_xy)
+                            .color(Color32::from_rgb(168, 85, 247))
+                            .width(1.9_f32)
+                            .style(LineStyle::dotted_dense())
+                            .name("Midpoint RK2 (t >= 0)"),
                     );
                 }
 
@@ -2838,6 +2958,44 @@ fn render_ode_phase_sublab(ui: &mut Ui, state: &mut LabState, theme: AcademicThe
                         );
                     }
                 }
+            }
+            if let Some(bench) = &state.ode_convergence_bench {
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "Step-Halving Convergence Comparator (T={:.1}) — Mean Empirical Orders: Euler={:.3}, Midpoint(RK2)={:.3}, RK4={:.3}",
+                        bench.t_end,
+                        bench.mean_order_euler,
+                        bench.mean_order_midpoint_rk2,
+                        bench.mean_order_rk4
+                    ))
+                    .strong()
+                    .small(),
+                );
+                egui::Grid::new("ode_convergence_bench_grid")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Method");
+                        ui.strong("Theory p");
+                        ui.strong("dt");
+                        ui.strong("Steps");
+                        ui.strong("Abs Error");
+                        ui.strong("Empirical Order");
+                        ui.end_row();
+                        for r in &bench.rows {
+                            ui.label(&r.method);
+                            ui.label(format!("O(dt^{})", r.theoretical_order));
+                            ui.label(format!("{:.4}", r.dt));
+                            ui.label(format!("{}", r.steps));
+                            ui.label(format!("{:.3e}", r.abs_error));
+                            ui.label(
+                                r.empirical_order
+                                    .map(|o| format!("{o:.3}"))
+                                    .unwrap_or_else(|| "—".to_string()),
+                            );
+                            ui.end_row();
+                        }
+                    });
             }
         });
 }
@@ -3694,5 +3852,15 @@ mod tests {
         let pde_csv = format_pde_curves_csv(&snap);
         assert!(pde_csv.starts_with("x,u_initial,u_m_t0,u_evolved\n"));
         assert_eq!(pde_csv.lines().count(), snap.initial_curve.len() + 1);
+    }
+
+    #[test]
+    fn lab_state_runs_ode_convergence_benchmark_for_default_system() {
+        let mut st = LabState::default();
+        st.run_current_ode_benchmark().expect("run benchmark");
+        let bench = st.ode_convergence_bench.as_ref().expect("bench populated");
+        assert_eq!(bench.rows.len(), 12);
+        assert!(bench.mean_order_rk4 > bench.mean_order_midpoint_rk2);
+        assert!(bench.mean_order_midpoint_rk2 > bench.mean_order_euler);
     }
 }

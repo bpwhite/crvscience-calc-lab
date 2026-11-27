@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://gnu.org>.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![deny(unsafe_code)]
 
 mod app;
 mod math_render;
@@ -28,10 +29,11 @@ mod ui_roadmap;
 
 use app::{AppTab, CalcLabApp, NavCommand};
 use calc_core::{
-    build_curriculum, build_notation_lexicon, check_scalar_equivalence, compute_bayes_binary,
-    evaluate_1d_pde, fit_ols_linear, generate_notation_flash_question, normal_cdf, score_attempt,
-    solve_planar_system_rk4, Expr, LearningRunRecord, Mat2, PdeInitialProfile, PdeKind,
-    ProblemGenerator, ProfileStore, RunMode, ScienceDomain,
+    benchmark_ode_integrator_convergence, build_curriculum, build_notation_lexicon,
+    check_scalar_equivalence, compute_bayes_binary, evaluate_1d_pde, fit_ols_linear,
+    generate_notation_flash_question, normal_cdf, score_attempt, solve_planar_system_rk4, Expr,
+    LearningRunRecord, Mat2, PdeInitialProfile, PdeKind, ProblemGenerator, ProfileStore, RunMode,
+    ScienceDomain,
 };
 use chrono::Utc;
 
@@ -299,6 +301,10 @@ fn cli_usage_text() -> String {
            -h, --help                         Print this help message and exit\n\
            -V, --version                      Print version information and exit\n\
                --self-test                    Run headless curriculum, symbolic, ODE/PDE, and SQLite verification\n\
+               --ode-benchmark                Run Euler vs Midpoint/RK2 vs RK4 step-halving convergence benchmark\n\
+               --preset <NAME>                ODE preset for --ode-benchmark (harmonic, damped, lotka, vanderpol)\n\
+               --format <table|json|csv>      Output format for --ode-benchmark (default: table)\n\
+               --out <PATH>                   Optional file path to write --ode-benchmark output\n\
                --screenshot <PNG>             Render an offscreen 1600x1000 screenshot to <PNG> and exit\n\
                --screenshot-view <1|2|3>, --view <1|2|3>\n\
                                               Select screenshot view for --screenshot (1 = Practice, 2 = ODE Phase Lab, 3 = Notation Studio)",
@@ -511,8 +517,70 @@ enum CliAction {
     Help,
     Version,
     SelfTest,
+    OdeBenchmark {
+        preset: String,
+        format: String,
+        out: Option<String>,
+    },
     Screenshot { path: String, view: u8 },
     Gui,
+}
+
+fn run_ode_benchmark_cli(
+    preset: &str,
+    format: &str,
+    out: Option<&str>,
+) -> Result<String, String> {
+    let (label, p_str, q_str, x0, y0, t_end) = match preset.to_ascii_lowercase().as_str() {
+        "damped" => ("Damped Oscillator (x'=y, y'=-2x-0.35y)", "y", "-2.0*x - 0.35*y", 2.2, 0.0, 2.0),
+        "lotka" => ("Lotka-Volterra (x'=x(1.2-0.8y), y'=y(-0.9+0.6x))", "x * (1.2 - 0.8*y)", "y * (-0.9 + 0.6*x)", 1.8, 0.8, 2.0),
+        "vanderpol" => ("Van der Pol (x'=y, y'=1.1(1-x^2)y-x)", "y", "1.1*(1 - x^2)*y - x", 0.35, 0.25, 2.0),
+        "harmonic" => ("Harmonic Oscillator (x'=y, y'=-x)", "y", "-x", 1.0, 0.0, 2.0),
+        other => return Err(format!("Unknown ODE preset '{other}'; expected harmonic, damped, lotka, or vanderpol.")),
+    };
+    let p = Expr::parse(p_str)?;
+    let q = Expr::parse(q_str)?;
+    let bench = benchmark_ode_integrator_convergence(&p, &q, label, x0, y0, t_end);
+    let text = match format.to_ascii_lowercase().as_str() {
+        "json" => bench
+            .to_json_pretty()
+            .map_err(|e| format!("JSON serialize error: {e}"))?,
+        "csv" => bench.to_csv(),
+        "table" => {
+            let mut buf = format!(
+                "ODE Integrator Convergence Benchmark — {} (T={:.2})\n\
+                 Mean Empirical Orders: Euler={:.4}, Midpoint(RK2)={:.4}, RK4={:.4}\n\
+                 {:<16} {:>6} {:>10} {:>6} {:>14} {:>10}\n",
+                bench.system_label,
+                bench.t_end,
+                bench.mean_order_euler,
+                bench.mean_order_midpoint_rk2,
+                bench.mean_order_rk4,
+                "Method",
+                "Theory",
+                "dt",
+                "Steps",
+                "AbsError",
+                "EmpOrder"
+            );
+            for r in &bench.rows {
+                let ord_s = r
+                    .empirical_order
+                    .map(|o| format!("{o:.4}"))
+                    .unwrap_or_else(|| "-".to_string());
+                buf.push_str(&format!(
+                    "{:<16} {:>6} {:>10.5} {:>6} {:>14.6e} {:>10}\n",
+                    r.method, r.theoretical_order, r.dt, r.steps, r.abs_error, ord_s
+                ));
+            }
+            buf
+        }
+        other => return Err(format!("Unsupported format '{other}'; expected table, json, or csv.")),
+    };
+    if let Some(path) = out {
+        std::fs::write(path, &text).map_err(|e| format!("Failed writing {path}: {e}"))?;
+    }
+    Ok(text)
 }
 
 fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
@@ -523,6 +591,10 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
     let mut help = false;
     let mut version = false;
     let mut self_test = false;
+    let mut ode_benchmark = false;
+    let mut preset: Option<String> = None;
+    let mut format: Option<String> = None;
+    let mut out: Option<String> = None;
     let mut screenshot_path: Option<String> = None;
     let mut view: Option<u8> = None;
 
@@ -550,6 +622,34 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
                 }
                 self_test = true;
                 idx += 1;
+            }
+            "--ode-benchmark" => {
+                if ode_benchmark {
+                    return Err("Duplicate option '--ode-benchmark'.".to_string());
+                }
+                ode_benchmark = true;
+                idx += 1;
+            }
+            "--preset" => {
+                let Some(raw) = args.get(idx + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                    return Err("Missing preset name after '--preset'.".to_string());
+                };
+                preset = Some(raw.to_string());
+                idx += 2;
+            }
+            "--format" => {
+                let Some(raw) = args.get(idx + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                    return Err("Missing format after '--format' (expected table, json, or csv).".to_string());
+                };
+                format = Some(raw.to_string());
+                idx += 2;
+            }
+            "--out" => {
+                let Some(raw) = args.get(idx + 1).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+                    return Err("Missing output path after '--out'.".to_string());
+                };
+                out = Some(raw.to_string());
+                idx += 2;
             }
             "--screenshot" => {
                 if screenshot_path.is_some() {
@@ -599,26 +699,41 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     if help {
-        if version || self_test || screenshot_path.is_some() || view.is_some() {
+        if version || self_test || ode_benchmark || screenshot_path.is_some() || view.is_some() {
             return Err("Option '--help' cannot be combined with other options.".to_string());
         }
         return Ok(CliAction::Help);
     }
 
     if version {
-        if self_test || screenshot_path.is_some() || view.is_some() {
+        if self_test || ode_benchmark || screenshot_path.is_some() || view.is_some() {
             return Err("Option '--version' cannot be combined with other options.".to_string());
         }
         return Ok(CliAction::Version);
     }
 
     if self_test {
-        if screenshot_path.is_some() || view.is_some() {
+        if ode_benchmark || screenshot_path.is_some() || view.is_some() {
             return Err(
-                "Option '--self-test' cannot be combined with screenshot options.".to_string(),
+                "Option '--self-test' cannot be combined with screenshot or benchmark options.".to_string(),
             );
         }
         return Ok(CliAction::SelfTest);
+    }
+
+    if ode_benchmark {
+        if screenshot_path.is_some() || view.is_some() {
+            return Err("Option '--ode-benchmark' cannot be combined with screenshot options.".to_string());
+        }
+        return Ok(CliAction::OdeBenchmark {
+            preset: preset.unwrap_or_else(|| "harmonic".to_string()),
+            format: format.unwrap_or_else(|| "table".to_string()),
+            out,
+        });
+    }
+
+    if preset.is_some() || format.is_some() || out.is_some() {
+        return Err("Options '--preset', '--format', and '--out' require '--ode-benchmark'.".to_string());
     }
 
     match (screenshot_path, view) {
@@ -636,6 +751,7 @@ fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
 fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     if std::env::args_os().len() > 1 {
+        #[allow(unsafe_code)]
         unsafe {
             windows_sys::Win32::System::Console::AttachConsole(
                 windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
@@ -665,6 +781,26 @@ fn main() -> eframe::Result<()> {
             if let Err(err) = run_headless_self_test() {
                 eprintln!("[FAIL] {}", err);
                 std::process::exit(1);
+            }
+            return Ok(());
+        }
+        CliAction::OdeBenchmark {
+            preset,
+            format,
+            out,
+        } => {
+            match run_ode_benchmark_cli(&preset, &format, out.as_deref()) {
+                Ok(text) => {
+                    if let Some(p) = out {
+                        println!("Wrote ODE convergence benchmark ({format}) to {p}");
+                    } else {
+                        println!("{text}");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("[CalcLab ODE Benchmark Error] {err}");
+                    std::process::exit(1);
+                }
             }
             return Ok(());
         }
@@ -852,5 +988,15 @@ mod tests {
         assert!(usage.contains("-V, --version"));
         assert!(usage.contains("--screenshot-view <1|2|3>"));
         assert!(usage.contains("--view <1|2|3>"));
+        assert!(usage.contains("--ode-benchmark"));
+    }
+
+    #[test]
+    fn cli_ode_benchmark_runs_json_and_csv() {
+        let json = run_ode_benchmark_cli("harmonic", "json", None).expect("json benchmark");
+        assert!(json.contains("\"mean_order_rk4\""));
+        let csv = run_ode_benchmark_cli("damped", "csv", None).expect("csv benchmark");
+        assert_eq!(csv.lines().count(), 13);
+        assert!(run_ode_benchmark_cli("unknown", "table", None).is_err());
     }
 }

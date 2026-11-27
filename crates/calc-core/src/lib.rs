@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://gnu.org>.
 
+#![forbid(unsafe_code)]
+
 pub mod curriculum;
 pub mod domains;
 pub mod expr;
@@ -51,9 +53,11 @@ pub use notation::{
     NotationFlashQuestion,
 };
 pub use ode_pde::{
-    evaluate_1d_pde, evaluate_1d_pde_custom, extract_zero_level_segments, find_planar_equilibria,
-    solve_planar_system_euler_timed, solve_planar_system_rk4, solve_planar_system_rk4_timed,
-    solve_scalar_ode_rk4, EquilibriumPoint, PdeInitialProfile, PdeKind, PdeSnapshot,
+    benchmark_ode_integrator_convergence, evaluate_1d_pde, evaluate_1d_pde_custom,
+    extract_zero_level_segments, find_planar_equilibria, solve_planar_system_euler_timed,
+    solve_planar_system_midpoint_timed, solve_planar_system_rk4, solve_planar_system_rk4_timed,
+    solve_scalar_ode_rk4, EquilibriumPoint, OdeConvergenceBenchmark, OdeConvergenceStepRow,
+    OdeMethodKind, PdeInitialProfile, PdeKind, PdeSnapshot,
 };
 pub use prob_stats::{
     binomial_pmf, compute_bayes_binary, erf_approx, exponential_cdf, exponential_pdf,

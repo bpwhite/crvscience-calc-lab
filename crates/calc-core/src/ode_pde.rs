@@ -180,6 +180,225 @@ pub fn solve_planar_system_euler_timed(
     traj
 }
 
+/// Integrates a 2D autonomous planar system dx/dt = P(x, y), dy/dt = Q(x, y) via 2nd-order Midpoint (RK2), returning `[t, x, y]`.
+pub fn solve_planar_system_midpoint_timed(
+    rhs_p: &Expr,
+    rhs_q: &Expr,
+    x0: f64,
+    y0: f64,
+    dt: f64,
+    steps: usize,
+    bound: f64,
+) -> Vec<[f64; 3]> {
+    let mut traj = Vec::with_capacity(steps + 1);
+    if !x0.is_finite() || !y0.is_finite() || x0.abs() > bound || y0.abs() > bound {
+        return traj;
+    }
+    let mut t = 0.0_f64;
+    let mut x = x0;
+    let mut y = y0;
+    traj.push([t, x, y]);
+
+    for _ in 0..steps {
+        let k1x = rhs_p.eval_2d(x, y);
+        let k1y = rhs_q.eval_2d(x, y);
+        let mid_x = x + 0.5 * dt * k1x;
+        let mid_y = y + 0.5 * dt * k1y;
+        let k2x = rhs_p.eval_2d(mid_x, mid_y);
+        let k2y = rhs_q.eval_2d(mid_x, mid_y);
+        let nx = x + dt * k2x;
+        let ny = y + dt * k2y;
+        if !nx.is_finite() || !ny.is_finite() || nx.abs() > bound || ny.abs() > bound {
+            break;
+        }
+        t += dt;
+        x = nx;
+        y = ny;
+        traj.push([t, x, y]);
+    }
+    traj
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OdeMethodKind {
+    Euler,
+    MidpointRk2,
+    Rk4,
+}
+
+impl OdeMethodKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Euler => "Explicit Euler",
+            Self::MidpointRk2 => "Midpoint (RK2)",
+            Self::Rk4 => "Classical RK4",
+        }
+    }
+
+    pub fn theoretical_order(self) -> u8 {
+        match self {
+            Self::Euler => 1,
+            Self::MidpointRk2 => 2,
+            Self::Rk4 => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OdeConvergenceStepRow {
+    pub method: String,
+    pub theoretical_order: u8,
+    pub dt: f64,
+    pub steps: usize,
+    pub final_x: f64,
+    pub final_y: f64,
+    pub abs_error: f64,
+    pub empirical_order: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OdeConvergenceBenchmark {
+    pub system_label: String,
+    pub t_end: f64,
+    pub x0: f64,
+    pub y0: f64,
+    pub ref_x: f64,
+    pub ref_y: f64,
+    pub rows: Vec<OdeConvergenceStepRow>,
+    pub mean_order_euler: f64,
+    pub mean_order_midpoint_rk2: f64,
+    pub mean_order_rk4: f64,
+}
+
+impl OdeConvergenceBenchmark {
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    pub fn to_csv(&self) -> String {
+        let mut out = String::from(
+            "system_label,method,theoretical_order,dt,steps,final_x,final_y,abs_error,empirical_order\n",
+        );
+        let sys_escaped = if self.system_label.contains(',') || self.system_label.contains('"') {
+            format!("\"{}\"", self.system_label.replace('"', "\"\""))
+        } else {
+            self.system_label.clone()
+        };
+        for r in &self.rows {
+            let ord_str = r
+                .empirical_order
+                .map(|o| format!("{o:.6}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "{},{},{},{:.6},{},{:.10},{:.10},{:.10e},{}\n",
+                sys_escaped,
+                r.method,
+                r.theoretical_order,
+                r.dt,
+                r.steps,
+                r.final_x,
+                r.final_y,
+                r.abs_error,
+                ord_str,
+            ));
+        }
+        out
+    }
+}
+
+/// Benchmarks step-halving empirical convergence orders for Explicit Euler (O(dt)),
+/// Midpoint RK2 (O(dt^2)), and Classical RK4 (O(dt^4)) against a fine RK4 reference.
+pub fn benchmark_ode_integrator_convergence(
+    rhs_p: &Expr,
+    rhs_q: &Expr,
+    system_label: &str,
+    x0: f64,
+    y0: f64,
+    t_end: f64,
+) -> OdeConvergenceBenchmark {
+    let t_horizon = t_end.clamp(0.4, 8.0);
+    let bound = (x0.abs().max(y0.abs()) * 20.0).max(50.0);
+    let ref_steps = 4096_usize;
+    let ref_dt = t_horizon / (ref_steps as f64);
+    let ref_traj = solve_planar_system_rk4_timed(rhs_p, rhs_q, x0, y0, ref_dt, ref_steps, bound);
+    let (ref_x, ref_y) = ref_traj
+        .last()
+        .map(|p| (p[1], p[2]))
+        .unwrap_or((x0, y0));
+
+    let base_steps = 10_usize;
+    let refinements = [1_usize, 2, 4, 8];
+    let mut rows = Vec::with_capacity(12);
+    let mut mean_orders = [0.0_f64; 3];
+
+    for (m_idx, kind) in [
+        OdeMethodKind::Euler,
+        OdeMethodKind::MidpointRk2,
+        OdeMethodKind::Rk4,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut prev_err: Option<f64> = None;
+        let mut orders = Vec::new();
+        for &mult in &refinements {
+            let steps = base_steps * mult;
+            let dt = t_horizon / (steps as f64);
+            let traj = match kind {
+                OdeMethodKind::Euler => {
+                    solve_planar_system_euler_timed(rhs_p, rhs_q, x0, y0, dt, steps, bound)
+                }
+                OdeMethodKind::MidpointRk2 => {
+                    solve_planar_system_midpoint_timed(rhs_p, rhs_q, x0, y0, dt, steps, bound)
+                }
+                OdeMethodKind::Rk4 => {
+                    solve_planar_system_rk4_timed(rhs_p, rhs_q, x0, y0, dt, steps, bound)
+                }
+            };
+            let (fx, fy) = traj.last().map(|p| (p[1], p[2])).unwrap_or((f64::NAN, f64::NAN));
+            let err = (fx - ref_x).hypot(fy - ref_y);
+            let emp_order = if let Some(pe) = prev_err {
+                if pe.is_finite() && err.is_finite() && pe > 1e-15 && err > 1e-15 {
+                    let ord = (pe / err).log2();
+                    orders.push(ord);
+                    Some(ord)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            prev_err = Some(err);
+            rows.push(OdeConvergenceStepRow {
+                method: kind.label().to_string(),
+                theoretical_order: kind.theoretical_order(),
+                dt,
+                steps,
+                final_x: fx,
+                final_y: fy,
+                abs_error: err,
+                empirical_order: emp_order,
+            });
+        }
+        if !orders.is_empty() {
+            mean_orders[m_idx] = orders.iter().sum::<f64>() / (orders.len() as f64);
+        }
+    }
+
+    OdeConvergenceBenchmark {
+        system_label: system_label.to_string(),
+        t_end: t_horizon,
+        x0,
+        y0,
+        ref_x,
+        ref_y,
+        rows,
+        mean_order_euler: mean_orders[0],
+        mean_order_midpoint_rk2: mean_orders[1],
+        mean_order_rk4: mean_orders[2],
+    }
+}
+
 /// Extracts zero-level contour segments `f(x, y) = 0` via marching squares on a `(grid_n + 1)^2` grid.
 pub fn extract_zero_level_segments(
     expr: &Expr,
@@ -962,5 +1181,45 @@ mod tests {
                 custom.l2_energy_ratio
             );
         }
+    }
+
+    #[test]
+    fn ode_convergence_benchmark_verifies_euler_rk2_and_rk4_empirical_orders() {
+        let p = Expr::parse("y").expect("parse p");
+        let q = Expr::parse("-x").expect("parse q");
+        let bench = benchmark_ode_integrator_convergence(
+            &p,
+            &q,
+            "Harmonic Oscillator (x'=y, y'=-x)",
+            1.0,
+            0.0,
+            2.0,
+        );
+        assert_eq!(bench.rows.len(), 12);
+        assert!(
+            bench.mean_order_euler > 0.85 && bench.mean_order_euler < 1.25,
+            "Expected Euler empirical order ~1.0, got {}",
+            bench.mean_order_euler
+        );
+        assert!(
+            bench.mean_order_midpoint_rk2 > 1.85 && bench.mean_order_midpoint_rk2 < 2.25,
+            "Expected Midpoint RK2 empirical order ~2.0, got {}",
+            bench.mean_order_midpoint_rk2
+        );
+        assert!(
+            bench.mean_order_rk4 > 3.75 && bench.mean_order_rk4 < 4.25,
+            "Expected RK4 empirical order ~4.0, got {}",
+            bench.mean_order_rk4
+        );
+
+        let json = bench.to_json_pretty().expect("serialize benchmark json");
+        let decoded: OdeConvergenceBenchmark =
+            serde_json::from_str(&json).expect("roundtrip benchmark json");
+        assert_eq!(decoded.rows.len(), 12);
+
+        let csv = bench.to_csv();
+        assert_eq!(csv.lines().count(), 13);
+        assert!(csv.contains("Midpoint (RK2)"));
+        assert!(csv.contains("empirical_order"));
     }
 }

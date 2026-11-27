@@ -15,7 +15,7 @@
       "mean_steps_per_problem": 2.673611111111111,
       "module_count": 48,
       "notation_lexicon_entries": 15,
-      "ols_r_squared": 0.9988932358694529,
+      "ols_r_squared": 0.9988932358694528,
       "ols_slope": 1.9699999999999995,
       "sqlite_mastery_records": 48,
       "stage_count": 8,
@@ -197,7 +197,7 @@
         {
           "a0": 1.000000000000001,
           "kind": "1D Advection-Diffusion: u_t + v * u_x = alpha * u_xx (Periodic [0, 2*pi])",
-          "l2_energy_ratio": 0.9578301666150716,
+          "l2_energy_ratio": 0.9578301666150715,
           "l2_truncation_error": 9.86724757831024e-16,
           "modes": 8
         }

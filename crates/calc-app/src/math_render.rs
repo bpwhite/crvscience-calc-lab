@@ -919,7 +919,7 @@ impl Parser {
             }
         }
         if nodes.len() == 1 {
-            nodes.into_iter().next().unwrap()
+            nodes.into_iter().next().unwrap_or(MathNode::Row(Vec::new()))
         } else {
             MathNode::Row(nodes)
         }
@@ -951,7 +951,7 @@ impl Parser {
                 }
             }
             Some(if nodes.len() == 1 {
-                nodes.into_iter().next().unwrap()
+                nodes.into_iter().next().unwrap_or(MathNode::Row(Vec::new()))
             } else {
                 MathNode::Row(nodes)
             })
