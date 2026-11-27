@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 build = "build.rs"
+homepage.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "calc-app"
